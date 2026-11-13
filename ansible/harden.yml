@@ -1,0 +1,85 @@
+---
+# Build step 2: CIS hardening with the pinned ansible-lockdown role. Packer
+# passes the rendered profile (`@hardening.yml`, which names the role and holds
+# every deviation from its defaults) and `--tags <profile>`. The audit is not
+# run here: the test step audits the finished image instead.
+- name: Harden the image
+  hosts: all
+  become: true
+  gather_facts: true
+  tasks:
+    - name: Apply the hardening role
+      ansible.builtin.include_role:
+        name: "{{ hardening_role }}"
+      # `always` so the include itself survives `--tags`. The role's own tasks
+      # are still selected by the profile tag.
+      tags: always
+
+    # CIS asks for every filesystem kernel module the system does not use to
+    # be blocked (1.1.1.10 on Ubuntu 24.04, 1.1.1.9 on RHEL 9), and the
+    # lockdown roles only report on it. The image's hardening profile names
+    # the modules to keep, which are an exception in exceptions.yml.
+    - name: Block unused filesystem kernel modules
+      when: hardening_filesystem_modules_keep is defined
+      tags: always
+      block:
+        - name: Find the filesystem modules the running kernel ships
+          ansible.builtin.find:
+            paths: "/lib/modules/{{ ansible_facts['kernel'] }}/kernel/fs"
+            file_type: directory
+          register: harden_fs_module_dirs
+
+        # The same list the CIS audit script uses: df-style, so without
+        # pseudo filesystems.
+        - name: List the mounted filesystem types
+          ansible.builtin.command: findmnt --kernel --noheadings --df
+          changed_when: false
+          register: harden_fs_mounts
+
+        - name: Block every one that is not mounted or kept
+          ansible.builtin.template:
+            src: image-unused-filesystems.conf.j2
+            dest: /etc/modprobe.d/image-unused-filesystems.conf
+            owner: root
+            group: root
+            mode: "0644"
+          vars:
+            # Named as the CIS audit names them: the directory under
+            # kernel/fs, except overlayfs, whose module is overlay.
+            harden_fs_available: >-
+              {{ harden_fs_module_dirs.files | map(attribute='path') | map('basename')
+                 | map('regex_replace', '^overlayfs$', 'overlay') | list }}
+            harden_fs_mounted: "{{ harden_fs_mounts.stdout_lines | map('split') | map(attribute=1) | unique | list }}"
+            # The CIS script always allows these, mounted or not.
+            harden_fs_standard: [ext2, ext3, ext4, xfs, vfat]
+            harden_fs_blocked: >-
+              {{ harden_fs_available | difference(hardening_filesystem_modules_keep)
+                 | difference(harden_fs_mounted) | difference(harden_fs_standard) | sort }}
+
+    # CIS asks the firewall to allow only the services the system needs (4.2.1
+    # on RHEL 9), and RHEL9-CIS only reports on it. The image's hardening
+    # profile lists the services the default zone allows.
+    - name: Allow only the image's services in the default firewall zone
+      when: hardening_firewall_services is defined
+      tags: always
+      block:
+        - name: List the services the default zone allows
+          ansible.builtin.command: firewall-cmd --permanent --list-services
+          changed_when: false
+          register: harden_firewall_current
+
+        - name: Remove the services the image does not need
+          ansible.posix.firewalld:
+            service: "{{ item }}"
+            permanent: true
+            immediate: true
+            state: disabled
+          loop: "{{ harden_firewall_current.stdout.split() | difference(hardening_firewall_services) }}"
+
+        - name: Allow the services the image needs
+          ansible.posix.firewalld:
+            service: "{{ item }}"
+            permanent: true
+            immediate: true
+            state: enabled
+          loop: "{{ hardening_firewall_services }}"

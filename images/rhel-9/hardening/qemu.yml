@@ -1,0 +1,6 @@
+---
+# Settings for the QEMU target only, merged over common.yml. The QEMU target
+# installs from the ISO, so it controls the disk layout and needs no
+# exceptions for the separate partitions CIS asks for.
+
+settings: []

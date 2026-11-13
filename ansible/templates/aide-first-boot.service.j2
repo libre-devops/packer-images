@@ -1,0 +1,23 @@
+# {{ ansible_managed }}
+#
+# The image's AIDE database describes the build VM. On a VM's first boot, once
+# cloud-init has configured it, this makes one that describes that VM.
+[Unit]
+Description=Initialise the AIDE database for this VM
+ConditionFirstBoot=yes
+After=cloud-final.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+Nice=19
+IOSchedulingClass=idle
+{% for command in generalise_aide_init[ansible_facts['os_family']] %}
+ExecStart={{ command }}
+{% endfor %}
+
+[Install]
+# Not multi-user.target: a target is ordered after the units it wants, and
+# cloud-final.service can order itself after multi-user.target, which would
+# make an ordering loop.
+WantedBy=cloud-init.target

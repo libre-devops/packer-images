@@ -1,0 +1,30 @@
+---
+# How this image applies ansible-lockdown UBUNTU24-CIS, for every target.
+#
+# `profile` is the CIS profile, as the role tag that selects its controls.
+# Each entry under `settings` changes one of the role's defaults and says why.
+# This file and the target's file are the whole list of ways the image differs
+# from the role's own run, and the README table of deviations is written from
+# them. `just validate` refuses an entry with no reason, a duplicate, or a
+# variable the pinned role does not have, so a rename in a new role release
+# cannot silently drop a setting. A setting that switches a CIS control off
+# names its entry in ../../../exceptions.yml with `exception:` instead of
+# giving a reason.
+
+profile: level1-server
+
+settings:
+  - var: ubtu24cis_level_2
+    value: false
+    reason: >-
+      The role uses this for the audit only. The image applies Level 1 Server,
+      so the audit checks Level 1 Server.
+
+# CIS 1.1.1.10 asks for every filesystem kernel module the image does not use
+# to be blocked, and the lockdown role only reports on it. So the harden step
+# blocks every filesystem module the kernel ships, except those mounted at the
+# time and those kept here. Keeping a module is an exception, so `keep` must
+# match the exception's findings.
+filesystem_modules:
+  keep: [fat, isofs]
+  exception: EX-002

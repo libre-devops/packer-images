@@ -1,0 +1,80 @@
+---
+name: Image
+
+# Reusable: build one image for one target, boot it as a new VM, check it and
+# run the CIS audit gate. Each image has its own workflow that calls this one,
+# so every image has its own pipeline, triggers and history, and the steps are
+# defined once. Every step is the just recipe a local run would use.
+
+on:
+  workflow_call:
+    inputs:
+      image:
+        description: The folder under images/, for example ubuntu-24.04.
+        type: string
+        required: true
+      target:
+        description: The Packer source type to build. Only qemu runs in CI for now.
+        type: string
+        default: qemu
+
+permissions: {}
+
+env:
+  JUST_VERSION: 1.59.0
+
+jobs:
+  build:
+    name: Build and test (${{ inputs.image }}, ${{ inputs.target }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    permissions:
+      contents: read
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Enable KVM
+        # GitHub's Linux runners have /dev/kvm, but only root can open it.
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Install QEMU, UEFI firmware and xorriso
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends qemu-system-x86 qemu-utils ovmf xorriso
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+
+      - name: Build
+        env:
+          IMAGE: ${{ inputs.image }}
+          TARGET: ${{ inputs.target }}
+          # Packer fetches its plugins from GitHub releases; a token avoids the
+          # unauthenticated rate limit.
+          PACKER_GITHUB_API_TOKEN: ${{ github.token }}
+        run: uvx --from "rust-just==${JUST_VERSION}" just build "$IMAGE" "$TARGET"
+
+      - name: Test and audit
+        env:
+          IMAGE: ${{ inputs.image }}
+          TARGET: ${{ inputs.target }}
+        run: uvx --from "rust-just==${JUST_VERSION}" just test "$IMAGE" "$TARGET"
+
+      - name: Keep the build record and audit report
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ${{ inputs.image }}-${{ inputs.target }}-report
+          path: |
+            output/${{ inputs.image }}/${{ inputs.target }}/*.json
+            output/${{ inputs.image }}/${{ inputs.target }}/*.sha256
+            output/${{ inputs.image }}/${{ inputs.target }}/hardening.yml
+            output/${{ inputs.image }}/${{ inputs.target }}/audit/
+          if-no-files-found: ignore
+          retention-days: 90

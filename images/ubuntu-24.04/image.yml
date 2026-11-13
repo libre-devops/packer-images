@@ -1,0 +1,37 @@
+---
+# Ubuntu 24.04 LTS golden image.
+#
+# Everything third-party this image is built from is pinned here, so a change
+# to any of it touches this folder and runs this image's pipeline only.
+# Renovate bumps the lines marked `renovate:`. The ISO is bumped by hand: see
+# CONTRIBUTING.md.
+
+name: ubuntu-24.04
+description: Ubuntu 24.04 LTS Server (minimal), hardened to CIS Level 1 Server
+family: linux
+
+iso:
+  # Tried in order. Canonical moves a point release to old-releases once it is
+  # superseded, so the second URL keeps an old pin buildable.
+  urls:
+    - https://releases.ubuntu.com/24.04/ubuntu-24.04.5-live-server-amd64.iso
+    - https://old-releases.ubuntu.com/releases/24.04.5/ubuntu-24.04.5-live-server-amd64.iso
+  sha256: 97f3d7ffb032c3eb3b23d2c8be9cc76e60c2c1f2c0146ba5ba9fe01cafae0fd8
+
+hardening:
+  # The ansible-lockdown remediation role, at a release tag. `just deps`
+  # refuses it if the tag no longer points at this commit.
+  role:
+    repo: https://github.com/ansible-lockdown/UBUNTU24-CIS
+    # renovate: datasource=github-tags depName=ansible-lockdown/UBUNTU24-CIS
+    version: 1.8.0
+    commit: 3a2f05b9a8040eb869fd14fdca882aae4f68733b
+  # The matching goss audit content. It has no releases, only a branch per
+  # benchmark version, and that branch runs ahead of the role: its head can
+  # expect variables the released role does not pass. So it is pinned to the
+  # last commit before the role release. `just pin-audit` sets this, and
+  # `just deps` refuses a commit newer than the role release.
+  audit:
+    repo: https://github.com/ansible-lockdown/UBUNTU24-CIS-Audit
+    branch: benchmark_v1.0.0
+    commit: 4eb9eb9e6d3924af7377fc9dd6d3c9f32c63114a

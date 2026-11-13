@@ -1,0 +1,12 @@
+---
+# Collections the playbooks and the ansible-lockdown roles use, pinned. The
+# lockdown roles' own requirements files point at each collection's git main
+# branch, so the versions here are the ones every image is built and tested
+# with. Renovate bumps them.
+collections:
+  - name: ansible.posix
+    version: 2.2.2
+  - name: community.crypto
+    version: 3.5.1
+  - name: community.general
+    version: 13.5.1

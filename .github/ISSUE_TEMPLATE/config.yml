@@ -1,0 +1,6 @@
+---
+blank_issues_enabled: false
+contact_links:
+  - name: ansible-lockdown
+    url: https://github.com/ansible-lockdown
+    about: Problems with a CIS or STIG control itself belong with the lockdown role that implements it.

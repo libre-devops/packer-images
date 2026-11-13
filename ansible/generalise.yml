@@ -1,0 +1,124 @@
+---
+# Build step 3: remove what the build left behind, so every VM built from the
+# image starts as a first boot. The last part needs the build account gone, so
+# it is a script Packer runs as its shutdown command.
+- name: Generalise the image
+  hosts: all
+  become: true
+  gather_facts: true
+  tasks:
+    - name: Generalise a Debian family system
+      when: ansible_facts['os_family'] == 'Debian'
+      block:
+        - name: Remove the installer's logs, which hold the autoinstall answers
+          ansible.builtin.file:
+            path: /var/log/installer
+            state: absent
+
+        - name: Find the installer's cloud-init and network configuration
+          ansible.builtin.find:
+            paths: [/etc/cloud/cloud.cfg.d, /etc/netplan]
+            patterns: ["*installer*", "50-cloud-init.yaml"]
+          register: generalise_installer_files
+
+        - name: Remove it, so cloud-init configures each VM from its own datasource
+          ansible.builtin.file:
+            path: "{{ item.path }}"
+            state: absent
+          loop: "{{ generalise_installer_files.files }}"
+          loop_control:
+            label: "{{ item.path }}"
+
+        - name: Remove packages nothing needs and the package cache
+          ansible.builtin.apt:
+            autoremove: true
+            clean: true
+
+        - name: Create the sshd drop-in directory
+          ansible.builtin.file:
+            path: /etc/systemd/system/ssh.service.d
+            state: directory
+            owner: root
+            group: root
+            mode: "0755"
+
+        # Red Hat's sshd makes missing host keys itself (sshd-keygen).
+        - name: Make sshd create host keys if none exist
+          ansible.builtin.copy:
+            dest: /etc/systemd/system/ssh.service.d/10-host-keys.conf
+            content: |
+              # The image ships without host keys. cloud-init makes them on first
+              # boot; this covers a VM started without a cloud-init datasource.
+              [Service]
+              ExecStartPre=/usr/bin/ssh-keygen -A
+            owner: root
+            group: root
+            mode: "0644"
+
+    - name: Generalise a Red Hat family system
+      when: ansible_facts['os_family'] == 'RedHat'
+      block:
+        # The kickstart copies hold the build password, and the installer's
+        # logs repeat parts of the kickstart.
+        - name: Remove the installer's copies of the kickstart and its logs
+          ansible.builtin.file:
+            path: "{{ item }}"
+            state: absent
+          loop: [/root/anaconda-ks.cfg, /root/original-ks.cfg, /var/log/anaconda]
+
+        - name: Find the installer's network profiles
+          ansible.builtin.find:
+            paths: /etc/NetworkManager/system-connections
+            patterns: ["*.nmconnection"]
+          register: generalise_installer_connections
+
+        - name: Remove them, so cloud-init configures each VM's network from its own datasource
+          ansible.builtin.file:
+            path: "{{ item.path }}"
+            state: absent
+          loop: "{{ generalise_installer_connections.files }}"
+          loop_control:
+            label: "{{ item.path }}"
+
+    # The hardening role builds the AIDE database during the build, so it
+    # describes the build VM. Each VM makes its own on its first boot, once
+    # cloud-init has configured it, so AIDE reports changes since deployment.
+    - name: Re-initialise AIDE on each VM's first boot
+      vars:
+        generalise_aide_init:
+          # The command UBUNTU24-CIS uses to build the database.
+          Debian: [/usr/sbin/aideinit -y -f]
+          RedHat:
+            - /usr/sbin/aide --init
+            - /usr/bin/mv -f /var/lib/aide/aide.db.new.gz /var/lib/aide/aide.db.gz
+      block:
+        # Look for the program the unit runs first, not for aide itself, which
+        # is /usr/bin/aide on Debian and /usr/sbin/aide on Red Hat.
+        - name: Check whether AIDE is installed
+          ansible.builtin.stat:
+            path: "{{ (generalise_aide_init[ansible_facts['os_family']] | first).split() | first }}"
+          register: generalise_aide
+
+        - name: Install the first boot unit
+          when: generalise_aide.stat.exists
+          ansible.builtin.template:
+            src: aide-first-boot.service.j2
+            dest: /etc/systemd/system/aide-first-boot.service
+            owner: root
+            group: root
+            mode: "0644"
+
+        - name: Enable it
+          when: generalise_aide.stat.exists
+          ansible.builtin.systemd_service:
+            name: aide-first-boot.service
+            enabled: true
+            daemon_reload: true
+
+    - name: Install the finalise script for Packer's shutdown command
+      ansible.builtin.template:
+        src: image-finalise.sh.j2
+        dest: /usr/local/sbin/image-finalise
+        owner: root
+        group: root
+        mode: "0700"

@@ -1,0 +1,10 @@
+# {{ ansible_managed }}
+#
+# CIS "Ensure unused filesystems kernel modules are not available". Every
+# filesystem module the kernel ships is blocked, except the ones CIS always
+# allows ({{ harden_fs_standard | join(', ') }}), those mounted when the image
+# was built, and the ones the image keeps: {{ hardening_filesystem_modules_keep | join(', ') }}.
+{% for module in harden_fs_blocked %}
+blacklist {{ module }}
+install {{ module }} /bin/false
+{% endfor %}

@@ -1,0 +1,74 @@
+---
+# How this image applies ansible-lockdown RHEL9-CIS, for every target.
+#
+# `profile` is the CIS profile, as the role tag that selects its controls.
+# Each entry under `settings` changes one of the role's defaults and says why.
+# This file and the target's file are the whole list of ways the image differs
+# from the role's own run, and the README table of deviations is written from
+# them. `just validate` refuses an entry with no reason, a duplicate, or a
+# variable the pinned role does not have, so a rename in a new role release
+# cannot silently drop a setting. A setting that switches a CIS control off
+# names its entry in ../../../exceptions.yml with `exception:` instead of
+# giving a reason.
+
+profile: level1-server
+
+settings:
+  - var: rhel9cis_level_2
+    value: false
+    reason: >-
+      The role uses this for the audit only. The image applies Level 1 Server,
+      so the audit checks Level 1 Server.
+
+  - var: rhel9cis_sshd_allowusers
+    value: ""
+    reason: >-
+      The role's default allows SSH for the connecting user only, which is the
+      build account, and the build deletes it, so no one could log in to a VM.
+      SSH access stays limited by the role's default DenyUsers, which CIS 5.1.7
+      accepts. Restrict it further at deployment.
+
+  - var: rhel9cis_authselect_custom_profile_name
+    value: cis
+    reason: >-
+      The role refuses to run with its example name. The name only labels the
+      custom authselect profile the role creates and selects, under
+      /etc/authselect/custom.
+
+  - var: rhel9cis_disruption_high
+    value: true
+    reason: >-
+      The role skips the PAM, password policy and account controls (5.3.2 to
+      5.3.3, 5.4.2.1, 5.4.2.2, 5.4.2.7, 5.4.2.8 and 7.2.9) unless this is set,
+      because they can lock users out of a running system. The role's own notes
+      say they are safe on a new build with nothing configured yet, which is
+      what an image build is.
+
+  - var: rhel9cis_ipv6_disable_method
+    value: ""
+    reason: >-
+      IPv6 stays enabled (the role's default rhel9cis_ipv6_required), so there
+      is no method of disabling it. Left at sysctl, the audit checks that IPv6
+      is disabled by sysctl even though the image requires it.
+
+  - var: rhel9cis_rule_6_2_2_1_2
+    value: false
+    exception: EX-008
+
+  - var: rhel9cis_rule_6_2_2_1_3
+    value: false
+    exception: EX-008
+
+# CIS 4.2.1 asks the firewall to allow only the services the system needs,
+# and the role only reports on it. The harden step makes the default zone
+# allow exactly these: SSH, and DHCPv6 replies because IPv6 stays enabled.
+firewall_services: [ssh, dhcpv6-client]
+
+# CIS 1.1.1.9 asks for every filesystem kernel module the image does not use
+# to be blocked, and the lockdown role only reports on it. So the harden step
+# blocks every filesystem module the kernel ships, except those mounted at the
+# time and those kept here. Keeping a module is an exception, so `keep` must
+# match the exception's findings. jbd2 is kept because ext4 needs it.
+filesystem_modules:
+  keep: [fat, isofs, jbd2]
+  exception: EX-002

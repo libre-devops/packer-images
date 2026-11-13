@@ -1,0 +1,5 @@
+# LF everywhere, so files behave the same on Linux, macOS and Windows checkouts.
+* text=auto eol=lf
+
+*.gpg binary
+*.png binary

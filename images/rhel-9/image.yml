@@ -1,0 +1,45 @@
+---
+# Red Hat Enterprise Linux 9 golden image.
+#
+# Everything third-party this image is built from is pinned here, so a change
+# to any of it touches this folder and runs this image's pipeline only.
+# Renovate bumps the lines marked `renovate:`. The ISO is bumped by hand: see
+# CONTRIBUTING.md.
+
+name: rhel-9
+description: Red Hat Enterprise Linux 9 family (minimal), hardened to CIS Level 1 Server
+family: linux
+notes:
+  - >-
+    The QEMU target installs AlmaLinux 9, which is built from the same sources
+    as RHEL 9 and which the RHEL9-CIS role supports, because the RHEL ISO needs
+    a Red Hat login and a subscription to patch. The cloud targets, when they
+    come, will start from Red Hat's own pay-as-you-go images.
+
+iso:
+  # Tried in order. AlmaLinux moves a point release to the vault once it is
+  # superseded, so the second URL keeps an old pin buildable. The SHA-256 is
+  # from the release's CHECKSUM file, which is signed with the AlmaLinux 9 key
+  # (fingerprint BF18 AC28 7617 8908 D6E7 1267 D36C B86C B86B 3716).
+  urls:
+    - https://repo.almalinux.org/almalinux/9.8/isos/x86_64/AlmaLinux-9.8-x86_64-minimal.iso
+    - https://vault.almalinux.org/9.8/isos/x86_64/AlmaLinux-9.8-x86_64-minimal.iso
+  sha256: 7762a4b45a66235726db145a573658964bf77bf7b9bc1c018afe86a4cf37cc2e
+
+hardening:
+  # The ansible-lockdown remediation role, at a release tag. `just deps`
+  # refuses it if the tag no longer points at this commit.
+  role:
+    repo: https://github.com/ansible-lockdown/RHEL9-CIS
+    # renovate: datasource=github-tags depName=ansible-lockdown/RHEL9-CIS
+    version: 2.4.2
+    commit: a3ee6a3bb780964e4d33b946fcb1f340a5a281be
+  # The matching goss audit content. It has no releases, only a branch per
+  # benchmark version, and that branch runs ahead of the role: its head can
+  # expect variables the released role does not pass. So it is pinned to the
+  # last commit before the role release. `just pin-audit` sets this, and
+  # `just deps` refuses a commit newer than the role release.
+  audit:
+    repo: https://github.com/ansible-lockdown/RHEL9-CIS-Audit
+    branch: benchmark_v2.0.0
+    commit: 82a1ab34d5e132f3c280d1d978bdb58fc690434e

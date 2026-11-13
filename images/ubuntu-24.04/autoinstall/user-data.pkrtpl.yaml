@@ -1,0 +1,73 @@
+#cloud-config
+# Subiquity autoinstall for the QEMU target, rendered by Packer and attached as
+# a NoCloud seed disk (label cidata). Docs:
+# https://canonical-subiquity.readthedocs-hosted.com/en/latest/reference/autoinstall-reference.html
+autoinstall:
+  version: 1
+  interactive-sections: []
+  locale: ${locale}
+  keyboard:
+    layout: ${keyboard}
+  timezone: ${timezone}
+  source:
+    id: ubuntu-server-minimal
+  identity:
+    hostname: ${hostname}
+    # The build account. It has a random password, used only for sudo, and
+    # the generalise step deletes it before the image is captured.
+    username: ${username}
+    password: "${password_hash}"
+  ssh:
+    install-server: true
+    allow-pw: false
+    authorized-keys:
+      - "${ssh_public_key}"
+  # The main archive, not a country mirror picked by GeoIP from wherever the
+  # build ran, so every VM built from the image starts with the same sources.
+  apt:
+    geoip: false
+    primary:
+      - arches: [default]
+        uri: http://archive.ubuntu.com/ubuntu
+  updates: all
+  packages:
+    - qemu-guest-agent
+  # LVM, with a volume for each path CIS asks to be its own partition (/tmp,
+  # /home, /var, /var/tmp, /var/log and /var/log/audit), so the Level 1 mount
+  # option controls apply and Level 2 is possible later. The volume group
+  # keeps some free space for lvextend.
+  storage:
+    swap:
+      size: 0
+    config:
+      - {type: disk, id: disk0, match: {size: largest}, ptable: gpt, wipe: superblock-recursive, preserve: false, grub_device: false}
+      - {type: partition, id: part-esp, device: disk0, number: 1, size: 512M, flag: boot, grub_device: true, wipe: superblock, preserve: false}
+      - {type: partition, id: part-boot, device: disk0, number: 2, size: 1G, wipe: superblock, preserve: false}
+      - {type: partition, id: part-pv, device: disk0, number: 3, size: -1, wipe: superblock, preserve: false}
+      - {type: lvm_volgroup, id: vg0, name: vg0, devices: [part-pv], preserve: false}
+      - {type: lvm_partition, id: lv-root, volgroup: vg0, name: root, size: 12G, wipe: superblock, preserve: false}
+      - {type: lvm_partition, id: lv-home, volgroup: vg0, name: home, size: 2G, wipe: superblock, preserve: false}
+      - {type: lvm_partition, id: lv-tmp, volgroup: vg0, name: tmp, size: 2G, wipe: superblock, preserve: false}
+      - {type: lvm_partition, id: lv-var, volgroup: vg0, name: var, size: 6G, wipe: superblock, preserve: false}
+      - {type: lvm_partition, id: lv-var-tmp, volgroup: vg0, name: var_tmp, size: 2G, wipe: superblock, preserve: false}
+      - {type: lvm_partition, id: lv-var-log, volgroup: vg0, name: var_log, size: 3G, wipe: superblock, preserve: false}
+      - {type: lvm_partition, id: lv-var-log-audit, volgroup: vg0, name: var_log_audit, size: 2G, wipe: superblock, preserve: false}
+      - {type: format, id: fs-esp, volume: part-esp, fstype: fat32, preserve: false}
+      - {type: format, id: fs-boot, volume: part-boot, fstype: ext4, preserve: false}
+      - {type: format, id: fs-root, volume: lv-root, fstype: ext4, preserve: false}
+      - {type: format, id: fs-home, volume: lv-home, fstype: ext4, preserve: false}
+      - {type: format, id: fs-tmp, volume: lv-tmp, fstype: ext4, preserve: false}
+      - {type: format, id: fs-var, volume: lv-var, fstype: ext4, preserve: false}
+      - {type: format, id: fs-var-tmp, volume: lv-var-tmp, fstype: ext4, preserve: false}
+      - {type: format, id: fs-var-log, volume: lv-var-log, fstype: ext4, preserve: false}
+      - {type: format, id: fs-var-log-audit, volume: lv-var-log-audit, fstype: ext4, preserve: false}
+      - {type: mount, id: mnt-root, device: fs-root, path: /}
+      - {type: mount, id: mnt-boot, device: fs-boot, path: /boot}
+      - {type: mount, id: mnt-esp, device: fs-esp, path: /boot/efi}
+      - {type: mount, id: mnt-home, device: fs-home, path: /home}
+      - {type: mount, id: mnt-tmp, device: fs-tmp, path: /tmp}
+      - {type: mount, id: mnt-var, device: fs-var, path: /var}
+      - {type: mount, id: mnt-var-tmp, device: fs-var-tmp, path: /var/tmp}
+      - {type: mount, id: mnt-var-log, device: fs-var-log, path: /var/log}
+      - {type: mount, id: mnt-var-log-audit, device: fs-var-log-audit, path: /var/log/audit}
+  shutdown: reboot

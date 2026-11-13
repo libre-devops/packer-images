@@ -1,0 +1,29 @@
+---
+extends: default
+
+ignore: |
+  .ansible/
+  .cache/
+  .venv/
+  output/
+
+rules:
+  comments:
+    min-spaces-from-content: 1
+    # Autoinstall files must start with the bare `#cloud-config` line.
+    ignore: |
+      images/*/autoinstall/
+  comments-indentation: false
+  document-start:
+    ignore: |
+      images/*/autoinstall/
+  braces:
+    max-spaces-inside: 1
+  line-length:
+    max: 160
+  octal-values:
+    forbid-implicit-octal: true
+    forbid-explicit-octal: true
+  truthy:
+    allowed-values: ["true", "false"]
+    check-keys: false

@@ -1,0 +1,15 @@
+# Pinned tools installed by `just tools`.
+.tools/
+# Python and Ansible tooling.
+.venv/
+__pycache__/
+.ansible/
+*.retry
+# Roles, audit content and ISOs fetched by `just deps` and Packer.
+.cache/
+packer_cache/
+# Images, checksums, manifests and audit reports written by the builds and tests.
+output/
+# Editors.
+.idea/
+.vscode/

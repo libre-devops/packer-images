@@ -1,0 +1,7 @@
+---
+# Tools the builds download, pinned. Renovate bumps the lines marked
+# `renovate:`. `just tools` checks each download against the vendor's signed
+# checksums, using the keys in keys/, so no hash is recorded here.
+tools:
+  # renovate: datasource=github-releases depName=hashicorp/packer extractVersion=^v(?<version>.+)$
+  packer: 1.16.2

@@ -1,0 +1,94 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "description": "Renovate bumps the hardening role in each images/<name>/image.yml (run `just pin-audit` on its branch to move the audit content to match), the Packer plugins, Packer itself in versions.yml, the Ansible collections, the Python tools and GitHub Actions digests. Each image's pins get their own pull request, which runs that image's build, test and audit gate before it can merge. Installer ISOs are not Renovate's job: see CONTRIBUTING.md.",
+  "extends": [
+    "config:best-practices",
+    ":semanticCommits"
+  ],
+  "timezone": "Europe/London",
+  "schedule": [
+    "* 0-6 * * 6"
+  ],
+  "minimumReleaseAge": "7 days",
+  "labels": [
+    "dependencies"
+  ],
+  "osvVulnerabilityAlerts": true,
+  "vulnerabilityAlerts": {
+    "description": "Security fixes skip the weekly schedule and the release-age wait",
+    "enabled": true,
+    "schedule": [
+      "at any time"
+    ],
+    "minimumReleaseAge": null,
+    "labels": [
+      "security"
+    ]
+  },
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "Tool versions in versions.yml that carry a renovate comment on the line above",
+      "managerFilePatterns": [
+        "/^versions\\.yml$/"
+      ],
+      "matchStrings": [
+        "#\\s*renovate:\\s*datasource=(?<datasource>\\S+)\\s+depName=(?<depName>\\S+)(?:\\s+extractVersion=(?<extractVersion>\\S+))?\\s*\\n\\s*[\\w-]+:\\s*\"?(?<currentValue>[^\\s\"]+)\"?"
+      ]
+    },
+    {
+      "customType": "regex",
+      "description": "The hardening role in each image.yml: a release tag and the commit it must point at",
+      "managerFilePatterns": [
+        "/^images/[^/]+/image\\.yml$/"
+      ],
+      "matchStrings": [
+        "#\\s*renovate:\\s*datasource=(?<datasource>github-tags)\\s+depName=(?<depName>\\S+)\\s*\\n\\s*version:\\s*(?<currentValue>\\S+)\\s*\\n\\s*commit:\\s*(?<currentDigest>[0-9a-f]{40})"
+      ]
+    },
+    {
+      "customType": "regex",
+      "description": "Packer plugins in each image's plugins.pkr.hcl",
+      "managerFilePatterns": [
+        "/^images/[^/]+/plugins\\.pkr\\.hcl$/"
+      ],
+      "matchStrings": [
+        "#\\s*renovate:\\s*datasource=(?<datasource>github-releases)\\s+depName=(?<depName>\\S+)\\s*\\n\\s*version\\s*=\\s*\"(?<currentValue>[^\"]+)\""
+      ],
+      "extractVersionTemplate": "^v(?<version>.+)$"
+    }
+  ],
+  "packageRules": [
+    {
+      "description": "One pull request per image for its hardening role, so the image's own pipeline builds, tests and audits it",
+      "matchFileNames": [
+        "images/*/image.yml"
+      ],
+      "groupName": "hardening pins",
+      "additionalBranchPrefix": "{{parentDir}}-",
+      "commitMessageSuffix": "for {{parentDir}}"
+    },
+    {
+      "description": "Packer and its plugins together",
+      "matchFileNames": [
+        "versions.yml",
+        "images/*/plugins.pkr.hcl"
+      ],
+      "groupName": "packer"
+    },
+    {
+      "description": "Ansible collections together; every image pipeline runs on them",
+      "matchManagers": [
+        "ansible-galaxy"
+      ],
+      "groupName": "ansible collections"
+    },
+    {
+      "description": "Python tools in one weekly pull request",
+      "matchManagers": [
+        "pep621"
+      ],
+      "groupName": "python tools"
+    }
+  ]
+}

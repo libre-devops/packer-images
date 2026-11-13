@@ -1,0 +1,9 @@
+---
+profile: production
+exclude_paths:
+  - .ansible/
+  - .cache/
+  - .github/
+  - .venv/
+  - output/
+  - images/*/autoinstall/

@@ -1,0 +1,110 @@
+---
+# Test step: runs against a new VM booted from the finished image with a
+# cloud-init seed, as a platform would start one. Checks the first boot and
+# the generalisation, then runs the pinned audit through the lockdown role in
+# audit-only mode and fetches the report for the gate.
+- name: Verify the finished image
+  hosts: all
+  become: true
+  gather_facts: true
+  vars:
+    verify_build_user: packer
+    # What the build should have removed, beyond the build account.
+    verify_leftovers:
+      common:
+        - /usr/local/sbin/image-finalise
+        - "/home/{{ verify_build_user }}"
+        - /etc/cloud/cloud-init.disabled
+      Debian:
+        - /var/log/installer
+      RedHat:
+        - /root/anaconda-ks.cfg
+        - /root/original-ks.cfg
+        - /var/log/anaconda
+  tasks:
+    - name: Wait for cloud-init to finish the first boot
+      ansible.builtin.command: cloud-init status --wait --long
+      register: verify_cloud_init
+      changed_when: false
+      failed_when: verify_cloud_init.rc != 0
+
+    - name: Read the machine ID
+      ansible.builtin.slurp:
+        src: /etc/machine-id
+      register: verify_machine_id
+
+    - name: Look up the build account
+      ansible.builtin.getent:
+        database: passwd
+        key: "{{ verify_build_user }}"
+        fail_key: false
+
+    - name: Look for what the build should have removed
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      register: verify_leftover_stats
+      loop: "{{ verify_leftovers.common + verify_leftovers[ansible_facts['os_family']] }}"
+
+    - name: Check the image was generalised
+      ansible.builtin.assert:
+        that:
+          - ansible_facts.getent_passwd[verify_build_user] is none
+          - verify_machine_id.content | b64decode | trim | length == 32
+          - verify_leftover_stats.results | selectattr('stat.exists') | list | length == 0
+        fail_msg: >-
+          The image still carries build state: build account
+          {{ 'present' if ansible_facts.getent_passwd[verify_build_user] is not none else 'absent' }},
+          leftovers {{ verify_leftover_stats.results | selectattr('stat.exists') | map(attribute='item') | list }}.
+        quiet: true
+
+    - name: Check every CIS volume is its own mount
+      ansible.builtin.assert:
+        that: item in (ansible_facts.mounts | map(attribute='mount'))
+        fail_msg: "{{ item }} is not a separate mount"
+        quiet: true
+      loop: [/tmp, /home, /var, /var/tmp, /var/log, /var/log/audit]
+
+    # The first boot unit runs after cloud-init, at idle priority, so it can
+    # still be working. The audit checks the database it writes.
+    - name: Wait for AIDE to make this VM's database
+      ansible.builtin.systemd_service:
+        name: aide-first-boot.service
+      register: verify_aide
+      until: >-
+        verify_aide.status.ActiveState in ['active', 'failed'] or verify_aide.status.ConditionResult == 'no'
+      retries: 90
+      delay: 10
+
+    - name: Check AIDE made it on first boot
+      ansible.builtin.assert:
+        that:
+          - verify_aide.status.ActiveState == 'active'
+          - verify_aide.status.Result == 'success'
+        fail_msg: >-
+          aide-first-boot.service did not succeed: ActiveState={{ verify_aide.status.ActiveState }},
+          Result={{ verify_aide.status.Result }}, ConditionResult={{ verify_aide.status.ConditionResult }}
+        quiet: true
+
+    # No module lists failed units of every type.
+    - name: List units that failed on first boot  # noqa: command-instead-of-module
+      ansible.builtin.command: systemctl list-units --failed --plain --no-legend
+      register: verify_failed_units
+      changed_when: false
+
+    - name: Check no unit failed
+      ansible.builtin.assert:
+        that: verify_failed_units.stdout_lines | length == 0
+        fail_msg: "Failed units: {{ verify_failed_units.stdout_lines }}"
+        quiet: true
+
+    - name: Run the audit, as the lockdown role's audit-only mode
+      ansible.builtin.include_role:
+        name: "{{ hardening_role }}"
+      vars:
+        audit_only: true
+        run_audit: true
+        setup_audit: true
+        audit_content: archive
+        audit_conf_source: "{{ verify_audit_archive }}"
+        fetch_audit_output: true
+        audit_output_destination: "{{ verify_audit_output }}"

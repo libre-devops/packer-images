@@ -1,0 +1,88 @@
+---
+# Build step 1: the base system. Runs as the build account, over the build key.
+- name: Prepare the base system
+  hosts: all
+  become: true
+  gather_facts: true
+  vars:
+    # Guest agents, by target.
+    base_guest_agents:
+      qemu: [qemu-guest-agent]
+  tasks:
+    - name: Prepare a Debian family system
+      when: ansible_facts['os_family'] == 'Debian'
+      block:
+        - name: Wait for cloud-init to finish the first boot
+          ansible.builtin.command: cloud-init status --wait
+          register: base_cloud_init
+          changed_when: false
+          # 2 means it finished with recoverable errors, which the installer's
+          # own seed can cause. The test step checks the image's first boot.
+          failed_when: base_cloud_init.rc not in [0, 2]
+
+        - name: Upgrade every package
+          ansible.builtin.apt:
+            update_cache: true
+            upgrade: dist
+            autoremove: true
+            lock_timeout: 300
+
+        - name: Install the guest agent for the target
+          ansible.builtin.apt:
+            name: "{{ base_guest_agents[image_target] }}"
+            state: present
+
+        - name: Check whether an upgrade needs a reboot
+          ansible.builtin.stat:
+            path: /run/reboot-required
+          register: base_reboot_required
+
+        - name: Reboot into the upgraded kernel
+          when: base_reboot_required.stat.exists
+          ansible.builtin.reboot:
+            reboot_timeout: 900
+
+    - name: Prepare a Red Hat family system
+      when: ansible_facts['os_family'] == 'RedHat'
+      block:
+        # The installer does not include cloud-init, so it is added here. It
+        # must not run during the build, so it stays disabled until the
+        # finalise script resets it for each VM's first boot.
+        - name: Create the cloud-init configuration directory
+          ansible.builtin.file:
+            path: /etc/cloud
+            state: directory
+            owner: root
+            group: root
+            mode: "0755"
+
+        - name: Keep cloud-init from running during the build
+          ansible.builtin.copy:
+            dest: /etc/cloud/cloud-init.disabled
+            content: ""
+            owner: root
+            group: root
+            mode: "0644"
+
+        - name: Upgrade every package  # noqa: package-latest - upgrading everything is the point
+          ansible.builtin.dnf:
+            name: "*"
+            state: latest
+            update_cache: true
+          notify: Reboot into the upgraded system
+
+        # The minimal install has no tar either, which the audit, Ansible's
+        # unarchive and most agent installers need.
+        - name: Install cloud-init, tar and the guest agent for the target
+          ansible.builtin.dnf:
+            name: "{{ ['cloud-init', 'tar'] + base_guest_agents[image_target] }}"
+            state: present
+
+        - name: Remove packages nothing needs
+          ansible.builtin.dnf:
+            autoremove: true
+
+  handlers:
+    - name: Reboot into the upgraded system
+      ansible.builtin.reboot:
+        reboot_timeout: 900

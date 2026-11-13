@@ -1,0 +1,33 @@
+#!/bin/sh
+# {{ ansible_managed }}
+#
+# The last step of the image build, run once by Packer as its shutdown
+# command. It deletes the build account and everything that must be unique to
+# each VM, then powers off. It deletes itself first, so nothing of the build is
+# left in the image.
+set -eu
+
+rm -f -- "$0"
+
+# The build account. Packer's session is still open, so --force.
+userdel --force --remove '{{ ansible_user }}'
+
+# Make the next boot a first boot: cloud-init state, seed and logs, and a new
+# machine ID, SSH host keys and random seed on every VM.
+cloud-init clean --logs --seed --machine-id
+rm -f /etc/ssh/ssh_host_* /var/lib/systemd/random-seed
+# Red Hat family builds keep cloud-init off until now.
+rm -f /etc/cloud/cloud-init.disabled
+
+# Logs and history from the build.
+journalctl --rotate >/dev/null 2>&1 || true
+journalctl --vacuum-time=1s >/dev/null 2>&1 || true
+find /var/log -type f \( -name '*.gz' -o -name '*.[0-9]' -o -name '*.old' \) -delete
+find /var/log -type f -exec truncate -s 0 {} +
+rm -rf /var/lib/apt/lists/* /var/cache/dnf/* /tmp/* /var/tmp/* /root/.bash_history /root/.ansible
+
+# Hand the free space back, so the compressed qcow2 stays small.
+fstrim --all || true
+sync
+
+systemctl poweroff

@@ -1,0 +1,332 @@
+---
+# The CIS exception registry: every CIS control an image does not meet, the
+# decision behind it, and when that decision is next reviewed.
+#
+# The audit gate passes a failed check only when an active entry here covers
+# its control for that image. It also fails the build when an entry covers a
+# control that now passes, and when an entry's review is overdue, so nothing
+# here outlives its reason. `just validate` checks every entry against the
+# rules below and against each image's pinned lockdown role, and `just
+# exceptions` lists them, soonest review first.
+#
+# Each entry:
+#   id           EX-001 and up, in order. Never reuse an id.
+#   title        What the exception is, in a few words.
+#   kind         deviation: the image does not meet the control, on purpose.
+#                manual: the audit cannot check the control, so it always
+#                fails; the entry records what a person checked.
+#                false-positive: the audit check is wrong for this image: it
+#                cannot pass, or checks what the image's profile does not ask
+#                for. The reason says why, with what the image actually does,
+#                and the gate flags the entry once a fixed audit passes.
+#   risk         low, medium or high, for a VM built from the image.
+#   status       active, or retired with retired_on and retired_reason.
+#                Retire an entry rather than delete it, to keep the decision.
+#   controls     Each image, or <image>/<target>, and the CIS controls
+#                covered there. Numbering differs between benchmarks.
+#   reason       Why, or for a manual control, what the image does.
+#   mitigation   What reduces the risk, or what a deployment must do.
+#                Required for a deviation.
+#   findings     Optional. Narrows the exception to named findings: the gate
+#                takes every match of `pattern` (one capture group) from the
+#                failed checks' output, and fails on any not in `allowed`.
+#   decided_by   Who decided.
+#   decided_on   When, as YYYY-MM-DD.
+#   review_by    When the decision must be made again: at most a year after
+#                decided_on. Review it, then update decided_on and review_by.
+
+exceptions:
+  - id: EX-001
+    title: No bootloader password in the image
+    kind: deviation
+    risk: low
+    status: active
+    controls:
+      ubuntu-24.04: [1.4.1]
+      rhel-9: [1.4.1]
+    reason: >-
+      A bootloader password set in the image would be the same on every VM
+      built from it, so anyone with the image would know it, and it would
+      block the console recovery that cloud platforms and hypervisors rely on.
+    mitigation: >-
+      Changing boot entries needs access to the VM's console, which the
+      platform's own access control protects. Set a password per VM at
+      deployment where policy needs one.
+    decided_by: Craig Thacker
+    decided_on: 2026-11-11
+    review_by: 2027-05-11
+
+  - id: EX-002
+    title: Filesystem kernel modules the image needs stay loadable
+    kind: deviation
+    risk: low
+    status: active
+    controls:
+      ubuntu-24.04: [1.1.1.10]
+      rhel-9: [1.1.1.9]
+    reason: >-
+      The image needs fat, which vfat uses, to mount the EFI system partition
+      at every boot, and isofs to read cloud-init seed disks (NoCloud and
+      config drives). RHEL 9 also keeps jbd2, which ext4 needs, because CIS
+      counts ext4 as a standard filesystem and RHEL builds both as modules.
+      The harden step blocks every other filesystem module the kernel ships,
+      apart from those mounted and the ones CIS counts as standard (ext2, ext3,
+      ext4, xfs and vfat), because the lockdown roles only report on this
+      control. The audit fails while any unused module can load, so it cannot
+      pass in full.
+    mitigation: >-
+      fat is mounted on every boot anyway, and isofs only parses discs
+      attached to the VM, which the platform controls. Images built on this
+      one that need another module, such as overlay for containers, record
+      their own exception.
+    findings:
+      pattern: 'Kernel module: "([^"]+)" is not fully disabled'
+      allowed:
+        ubuntu-24.04: [fat, isofs]
+        rhel-9: [fat, isofs, jbd2]
+    decided_by: Craig Thacker
+    decided_on: 2026-11-11
+    review_by: 2027-05-11
+
+  - id: EX-003
+    title: Package repositories (manual control)
+    kind: manual
+    risk: low
+    status: active
+    controls:
+      ubuntu-24.04: [1.2.1.2]
+    reason: >-
+      The image uses only its distribution's own signed repositories, as the
+      installer configured them. Review any repository a deployment adds.
+    decided_by: Craig Thacker
+    decided_on: 2026-11-11
+    review_by: 2027-05-11
+
+  - id: EX-004
+    title: Listening services (manual control)
+    kind: manual
+    risk: low
+    status: active
+    controls:
+      ubuntu-24.04: [2.1.22]
+      rhel-9: [2.1.22]
+    reason: >-
+      The image listens on SSH (22/tcp) only, apart from local services on
+      loopback (chronyd's command port on rhel-9) and, on ubuntu-24.04, the
+      DHCP client. Review services a deployment adds.
+    decided_by: Craig Thacker
+    decided_on: 2026-11-11
+    review_by: 2027-05-11
+
+  - id: EX-005
+    title: Outbound firewall policy (manual control)
+    kind: manual
+    risk: low
+    status: active
+    controls:
+      ubuntu-24.04: [4.2.5]
+    reason: >-
+      The firewall denies outbound traffic except DNS, HTTP, HTTPS and NTP,
+      the lockdown role's default port list. Review it against your policy.
+    decided_by: Craig Thacker
+    decided_on: 2026-11-11
+    review_by: 2027-05-11
+
+  - id: EX-006
+    title: Firewall rules for open ports (manual control)
+    kind: manual
+    risk: low
+    status: active
+    controls:
+      ubuntu-24.04: [4.2.6]
+    reason: >-
+      SSH is the only port open to the network, and the firewall allows it.
+      Review ports a deployment opens.
+    decided_by: Craig Thacker
+    decided_on: 2026-11-11
+    review_by: 2027-05-11
+
+  - id: EX-007
+    title: Journal file permissions (manual control)
+    kind: manual
+    risk: low
+    status: active
+    controls:
+      ubuntu-24.04: [6.1.1.2]
+    reason: >-
+      The image keeps systemd's default journal file permissions. Review them
+      against your policy.
+    decided_by: Craig Thacker
+    decided_on: 2026-11-11
+    review_by: 2027-05-11
+
+  - id: EX-008
+    title: No remote journal destination in the image
+    kind: deviation
+    risk: medium
+    status: active
+    controls:
+      rhel-9: [6.2.2.1.2, 6.2.2.1.3]
+    reason: >-
+      Where a VM's logs go, and the certificates that authenticate it to the
+      log server, belong to each deployment, not to an image. RHEL9-CIS would
+      otherwise point systemd-journal-upload at its example address,
+      192.168.50.42, with certificates that do not exist, and enable it. The
+      image installs systemd-journal-remote (6.2.2.1.1) and keeps the receiver
+      masked (6.2.2.1.4). UBUNTU24-CIS skips these controls itself when no
+      log server is set, so ubuntu-24.04 needs no exception.
+    mitigation: >-
+      Logs stay on the VM, in the persistent journal, until a deployment sends
+      them on: set URL and the certificate paths in
+      /etc/systemd/journal-upload.conf and enable systemd-journal-upload, or
+      use the platform's own log agent.
+    decided_by: Craig Thacker
+    decided_on: 2026-11-11
+    review_by: 2027-05-11
+
+  - id: EX-009
+    title: Firewall services (manual control)
+    kind: manual
+    risk: low
+    status: active
+    controls:
+      rhel-9: [4.2.1]
+    reason: >-
+      The default zone allows only the ssh and dhcpv6-client services and no
+      ports. The harden step sets that from firewall_services in the image's
+      hardening/common.yml, removing the cockpit service AlmaLinux allows by
+      default. Review services and ports a deployment opens.
+    decided_by: Craig Thacker
+    decided_on: 2026-11-11
+    review_by: 2027-05-11
+
+  - id: EX-010
+    title: Firewall loopback traffic (manual control)
+    kind: manual
+    risk: low
+    status: active
+    controls:
+      rhel-9: [4.2.2]
+    reason: >-
+      firewalld accepts traffic on the loopback interface, and the role adds
+      rules to the default zone that drop traffic from 127.0.0.1 or ::1
+      arriving on any other interface.
+    decided_by: Craig Thacker
+    decided_on: 2026-11-11
+    review_by: 2027-05-11
+
+  - id: EX-011
+    title: SUID and SGID files (manual control)
+    kind: manual
+    risk: low
+    status: active
+    controls:
+      rhel-9: [7.1.13]
+    reason: >-
+      Every SUID and SGID file in the image belongs to a distribution package
+      and is unmodified (rpm -V): mount, umount, su, sudo, passwd, chage,
+      gpasswd, newgrp, write, crontab, pam_timestamp_check, unix_chkpwd,
+      grub2-set-bootflag, utempter and ssh-keysign. Review files a deployment
+      adds.
+    decided_by: Craig Thacker
+    decided_on: 2026-11-11
+    review_by: 2027-05-11
+
+  - id: EX-012
+    title: Locked root account fails the root access check
+    kind: false-positive
+    risk: low
+    status: active
+    controls:
+      rhel-9: [5.4.2.4]
+    reason: >-
+      Root's password is locked, so root can only be reached through sudo.
+      RHEL9-CIS's own check for this control accepts a locked password, and so
+      does UBUNTU24-CIS-Audit for the same control, but this audit check only
+      accepts a set password. A root password in the image would be the same
+      on every VM.
+    decided_by: Craig Thacker
+    decided_on: 2026-11-11
+    review_by: 2027-05-11
+
+  - id: EX-013
+    title: SSH access check cannot match sshd syntax
+    kind: false-positive
+    risk: low
+    status: active
+    controls:
+      rhel-9: [5.1.7]
+    reason: >-
+      sshd's effective configuration (sshd -T) has DenyUsers nobody, the
+      role's default, which limits SSH access as the control asks. The audit
+      check looks for lines such as "DenyUsers: nobody", with a colon sshd's
+      syntax never has, and wants all four of AllowUsers, AllowGroups,
+      DenyUsers and DenyGroups, so it cannot pass.
+    decided_by: Craig Thacker
+    decided_on: 2026-11-11
+    review_by: 2027-05-11
+
+  - id: EX-014
+    title: No wireless hardware fails the wireless check
+    kind: false-positive
+    risk: low
+    status: active
+    controls:
+      rhel-9: [3.1.2]
+    reason: >-
+      The image has no wireless interfaces (nothing under
+      /sys/class/net/*/wireless), so the role rightly changes nothing. The
+      audit check reads NetworkManager's radio switches instead, which stay on
+      with no hardware behind them.
+    decided_by: Craig Thacker
+    decided_on: 2026-11-11
+    review_by: 2027-05-11
+
+  - id: EX-015
+    title: Unowned files check lists every file
+    kind: false-positive
+    risk: low
+    status: active
+    controls:
+      rhel-9: [7.1.12]
+    reason: >-
+      The audit check runs find with the role's list of excluded paths but no
+      -nouser or -nogroup test, so it lists every file on every local
+      filesystem. Run with those tests, the same search finds no unowned files
+      outside the paths the role excludes.
+    decided_by: Craig Thacker
+    decided_on: 2026-11-11
+    review_by: 2027-05-11
+
+  - id: EX-016
+    title: Login banner check expects a trailing space
+    kind: false-positive
+    risk: low
+    status: active
+    controls:
+      rhel-9: [1.7.2, 1.7.5]
+    reason: >-
+      /etc/issue holds the role's banner with no operating system details and
+      is owned by root with mode 0644. The audit check expects the banner
+      followed by a space the role does not write. 1.7.5 is listed because the
+      same check carries both control numbers.
+    decided_by: Craig Thacker
+    decided_on: 2026-11-11
+    review_by: 2027-05-11
+
+  - id: EX-017
+    title: Level 2 minimum password age checked at Level 1
+    kind: false-positive
+    risk: low
+    status: active
+    controls:
+      rhel-9: [5.4.1.2]
+    reason: >-
+      Both lockdown roles tag this control Level 2, so the Level 1 Server
+      profile does not apply it and PASS_MIN_DAYS stays 0. RHEL9-CIS-Audit
+      checks it at Level 1.
+    mitigation: >-
+      Set PASS_MIN_DAYS at deployment where policy applies Level 2.
+    decided_by: Craig Thacker
+    decided_on: 2026-11-11
+    review_by: 2027-05-11
