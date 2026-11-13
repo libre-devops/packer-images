@@ -114,7 +114,7 @@ tools:
     method: archive
     description: uv, the Python package and project manager
     # renovate: datasource=github-releases depName=astral-sh/uv
-    version: 0.13.7
+    version: 0.13.6
     url: https://github.com/astral-sh/uv/releases/download/{version}/uv-x86_64-unknown-linux-gnu.tar.gz
     checksums: https://github.com/astral-sh/uv/releases/download/{version}/uv-x86_64-unknown-linux-gnu.tar.gz.sha256
     sha256: "c5221ff41b7892bfc223543883600125f6a47fe845093e0f5bdff4f359196d83"  # 0.13.7
