@@ -27,10 +27,11 @@ Golden VM images built with Packer and configured with Ansible. Each image is in
 | [`ubuntu-24.04`](./images/ubuntu-24.04) | `qemu` | CIS Ubuntu Linux 24.04 LTS v1.0.0, Level 1 Server, with [UBUNTU24-CIS](https://github.com/ansible-lockdown/UBUNTU24-CIS) | [`ubuntu-24.04.yml`](./.github/workflows/ubuntu-24.04.yml) |
 | [`rhel-9`](./images/rhel-9) | `qemu` (AlmaLinux 9) | CIS Red Hat Enterprise Linux 9 v2.0.0, Level 1 Server, with [RHEL9-CIS](https://github.com/ansible-lockdown/RHEL9-CIS) | [`rhel-9.yml`](./.github/workflows/rhel-9.yml) |
 | [`azdo-agent-ubuntu-24.04`](./images/azdo-agent-ubuntu-24.04) | `qemu` | As its base, `ubuntu-24.04`: a role image for Azure DevOps scale set agents | [`azdo-agent-ubuntu-24.04.yml`](./.github/workflows/azdo-agent-ubuntu-24.04.yml) |
+| [`azdo-agent-rhel-9`](./images/azdo-agent-rhel-9) | `qemu` (AlmaLinux 9) | As its base, `rhel-9`: the same agent, on RHEL 9 | [`azdo-agent-rhel-9.yml`](./.github/workflows/azdo-agent-rhel-9.yml) |
 
 The `rhel-9` image's QEMU target installs AlmaLinux 9, which is built from the same sources as RHEL 9 and which RHEL9-CIS supports, because the RHEL ISO needs a Red Hat login and a subscription to patch. The work to build it from RHEL itself is in [`docs/rhel.md`](./docs/rhel.md). Its cloud targets, when they come, will start from Red Hat's own images.
 
-The golden images are the Linux bases; `azdo-agent-ubuntu-24.04` is the first role image built on one (see [Role images and tools](#role-images-and-tools)). Planned: the Azure Compute Gallery target, with Terraform for the gallery and the build, then the AWS AMI target; Windows Server 2025 and Windows 11 golden images, each hardened with its ansible-lockdown role (Windows-2025-CIS, Windows-11-CIS); and more role images, such as Azure Virtual Desktop hosts.
+The golden images are the Linux bases; `azdo-agent-ubuntu-24.04` and `azdo-agent-rhel-9` are the first role images built on them (see [Role images and tools](#role-images-and-tools)). Planned: the Azure Compute Gallery target, with Terraform for the gallery and the build, then the AWS AMI target; Windows Server 2025 and Windows 11 golden images, each hardened with its ansible-lockdown role (Windows-2025-CIS, Windows-11-CIS); and more role images, such as Azure Virtual Desktop hosts.
 
 ## How a build works
 
@@ -82,7 +83,7 @@ Every tool is defined once in [`tools/tools.yml`](./tools/tools.yml), with a met
 | `python` | Its own virtual environment under `/opt`, on the base image's Python, by uv, with no pip in it. | Version, and hash-locked requirements in `tools/locks/`: every package and hash, wheels only. |
 | `tenv` | Through tenv, which checks HashiCorp's signature with the key this repository pins. | Version. |
 
-Adding a tool is an entry in the catalogue, `just pin-tools <tool>`, and its name in an image's `tools`. Renovate bumps the versions; `just pin-tools` on its branch pins the new hashes. Everything installs as root and readable by every user, because the hardened umask is 027, and the test runs each tool's `check` as an unprivileged user and wants the pinned version in its output.
+Adding a tool is an entry in the catalogue, `just pin-tools <tool>`, and its name in an image's `tools`. Renovate bumps the versions, and the Pins workflow pins the new hashes on its branch. Everything installs as root and readable by every user, because the hardened umask is 027, and the test runs each tool's `check` as an unprivileged user and wants the pinned version in its output.
 
 ## Hardening
 
@@ -168,7 +169,8 @@ With KVM, a build takes 8 to 15 minutes and the test a few more on a 32 core mac
 | `just exceptions` | Lists the exception registry, soonest review first. |
 | `just docs` | Writes each image's README from its `image.yml`, `hardening/` and the exception registry. |
 | `just pin-tools [tool...]` | Pins the tools in `tools/tools.yml`: each archive's SHA-256, checked against the vendor's checksums, and each Python tool's hash-locked requirements. Run it after Renovate bumps a tool. |
-| `just pin-audit [image...]` | Pins each image's audit content to the commit that matches its role release. Run it after a role bump. |
+| `just pin-audit [image...]` | Pins each image's audit content to the commit that matches its role release. |
+| `just repin` | Brings every pin up to date with its version: tool SHA-256s and Python locks, audit content and READMEs. What a Renovate pull request needs; the Pins workflow runs it there. |
 | `just secrets` | Scans the full git history with gitleaks. |
 | `just clean [image]` | Deletes build output. |
 
@@ -200,7 +202,7 @@ requirements.yml       pinned Ansible collections
 
 ## Pins and updates
 
-Every third-party input is pinned, and [`SECURITY.md`](./SECURITY.md) lists how each one is checked. Renovate opens a pull request for new lockdown role releases (one per image, so that image's pipeline builds, tests and audits the change before it merges; run `just pin-audit <image>` on its branch to move the audit content to match), Packer and its plugins, the Ansible collections, the Python tools and GitHub Actions digests. Installer ISOs are bumped by hand: see [`CONTRIBUTING.md`](./CONTRIBUTING.md).
+Every third-party input is pinned, and [`SECURITY.md`](./SECURITY.md) lists how each one is checked. Renovate opens a pull request for new lockdown role releases (one per image, so that image's pipeline builds, tests and audits the change before it merges), the role images' tools, Packer and its plugins, the Ansible collections, the Python tools and GitHub Actions digests. Renovate bumps versions only. On its branches, the [Pins](./.github/workflows/pins.yml) workflow runs `just repin`, which pins what goes with each new version (an archive's SHA-256, a Python tool's locked requirements, a role's audit content), commits it as one commit GitHub signs, and starts the checks on it, so nobody edits a pin by hand. Installer ISOs are bumped by hand: see [`CONTRIBUTING.md`](./CONTRIBUTING.md).
 
 ## Contributing
 

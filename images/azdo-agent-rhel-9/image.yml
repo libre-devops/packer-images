@@ -1,0 +1,31 @@
+---
+# Azure DevOps scale set agent, on the hardened rhel-9 image.
+#
+# A role image: it starts from its base's finished disk, so it keeps the
+# base's hardening and takes its audit content and exceptions, and adds the
+# tools listed here from tools/tools.yml. Adding a tool is a name here, and an
+# entry in the catalogue if it is not there yet.
+
+name: azdo-agent-rhel-9
+description: Azure DevOps scale set agent, on the hardened rhel-9 image
+family: linux
+base: rhel-9
+notes:
+  - >-
+    Azure DevOps installs the Azure Pipelines agent itself when it adds a VM to
+    a scale set pool, as Microsoft advises, so the image does not. It has the
+    libraries the agent needs and the tools pipelines use. Podman, with the
+    docker command, comes from the base image. Its QEMU target builds on
+    AlmaLinux 9, as rhel-9's does.
+
+tools:
+  - azure-pipelines-agent-deps
+  - git
+  - jq
+  - python
+  - uv
+  - azure-cli
+  - ansible
+  - tenv
+  - terraform
+  - podman-compose

@@ -811,8 +811,19 @@ def cmd_pin_audit(args: argparse.Namespace) -> None:
         print(f"{name}: pinned {image.audit_name} to {commit[:12]} ({date}), to match {image.role_name} {image.role['version']}", file=sys.stderr)
 
 
+def python_lock_current(name: str, tool: dict) -> bool:
+    lock = LOCKS / f"{name}.txt"
+    return lock.is_file() and bool(
+        re.search(rf"^{re.escape(str(tool.get('package')))}=={re.escape(str(tool.get('version')))}\b", lock.read_text(encoding="utf-8"), re.MULTILINE | re.IGNORECASE)
+    )
+
+
 def cmd_pin_tools(args: argparse.Namespace) -> None:
-    """Pin each archive tool's SHA-256 and each python tool's hash-locked requirements."""
+    """Pin each archive tool's SHA-256 and each python tool's hash-locked requirements.
+
+    Only pins that are missing or were made for another version, unless
+    --force: a pin changes when its version does, and not otherwise.
+    """
     catalogue = load_catalogue()
     for name in args.tools:
         if name not in catalogue:
@@ -820,6 +831,14 @@ def cmd_pin_tools(args: argparse.Namespace) -> None:
     text = CATALOGUE.read_text(encoding="utf-8")
     for name in args.tools or list(catalogue):
         tool = catalogue[name]
+        if tool.get("method") == "archive" and not args.force:
+            pin = SHA256_PIN.search(tool_blocks(text)[name])
+            if pin and pin.group(2) == str(tool.get("version")):
+                print(f"{name}: {tool['version']} already pinned", file=sys.stderr)
+                continue
+        if tool.get("method") == "python" and not args.force and python_lock_current(name, tool):
+            print(f"{name}: {tool['version']} already locked", file=sys.stderr)
+            continue
         if tool.get("method") == "archive":
             digest = pin_archive(name, tool)
             block = tool_blocks(text)[name]
@@ -1502,6 +1521,7 @@ def main() -> int:
 
     sub = commands.add_parser("pin-tools", help="pin each archive tool's SHA-256 and lock each python tool's requirements")
     sub.add_argument("tools", nargs="*")
+    sub.add_argument("--force", action="store_true", help="pin again even where the pin is for the current version")
     sub.set_defaults(func=cmd_pin_tools)
 
     sub = commands.add_parser("render", help="write the hardening vars, tool list, Packer variables and image record")

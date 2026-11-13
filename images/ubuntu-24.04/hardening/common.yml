@@ -22,6 +22,20 @@ settings:
     value: false
     exception: EX-018
 
+  - var: ubtu24cis_ufw_allow_out_ports
+    value:
+      - {port: 53, proto: tcp}
+      - {port: 53, proto: udp}
+      - {port: 80, proto: tcp}
+      - {port: 123, proto: udp}
+      - {port: 443, proto: tcp}
+      - {port: 22, proto: tcp}
+    reason: >-
+      The role's list, with SSH (22/tcp) added, so git can reach Azure Repos and
+      GitHub over SSH and Ansible can manage other hosts: a build agent's main
+      jobs, and common on any server. The firewall still denies every other
+      port out. RHEL 9's firewall does not filter outbound traffic at all.
+
   - var: ubtu24cis_level_2
     value: false
     reason: >-

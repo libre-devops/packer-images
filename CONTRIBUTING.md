@@ -32,7 +32,7 @@ just all ubuntu-24.04   # build, boot as a new VM, check, audit and gate
 
 ## When Renovate bumps a lockdown role
 
-1. Check out its branch and run `just pin-audit <image>`, which moves the audit content to the last commit before the new release. Commit the change to the branch.
+1. The Pins workflow runs `just repin` on its branch, which moves the audit content to the last commit before the new release, commits it to the branch and starts the checks. On a branch from a fork, run `just repin` yourself and commit the result.
 2. Run `just validate`. A role release can rename or remove variables, and validation names any setting in `hardening/` that no longer exists.
 3. Let the image's pipeline build, test and audit the branch. If new failures appear, fix the image or accept them with a reason, and run `just docs`.
 
@@ -82,7 +82,7 @@ Renovate cannot bump ISOs, so do it by hand when a point release comes out:
 3. Add its name to `tools` in each image's `image.yml` that needs it. What it requires comes with it.
 4. Run `just validate`, `just docs` and `just all <image>`, and attach the audit summary to the pull request.
 
-When Renovate bumps a tool, run `just pin-tools` on its branch: the build refuses an archive that does not match its pin, and `just validate` refuses a lock or a SHA-256 pinned for another version.
+When Renovate bumps a tool, the Pins workflow ([`pins.yml`](./.github/workflows/pins.yml)) runs `just repin` on its branch: it pins the new SHA-256 against the vendor's checksums or relocks the Python tool, commits that as one commit GitHub signs, and starts the checks on it. Nobody edits a hash by hand. On a branch from a fork, run `just repin` yourself. Either way, the build refuses an archive that does not match its pin, and `just validate` refuses a lock or a SHA-256 pinned for another version.
 
 ## Add a role image
 

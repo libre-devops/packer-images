@@ -82,7 +82,12 @@ tools:
     packages:
       Debian: [git]
       RedHat: [git]
-    check: git --version
+    # And SSH out, which git uses for Azure Repos and GitHub: ssh-keyscan
+    # fails, with no output, unless it reaches github.com on port 22.
+    check:
+      - git --version
+      - ssh-keyscan -T 15 -t ed25519 github.com
+    expect: "github.com ssh-ed25519"
 
   jq:
     method: package

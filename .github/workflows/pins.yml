@@ -1,0 +1,53 @@
+---
+name: Pins
+
+# Renovate bumps versions, but the pins that go with them are not its job. On
+# a pull request from a branch in this repository, Renovate's included, that
+# changes a tool's version or an image's lockdown role, this pins the new
+# SHA-256s, Python locks and audit content, and regenerates the image
+# READMEs, as `just repin` does locally. It commits them to the branch as one
+# commit GitHub signs, then starts the checks on it, because a commit made
+# with GITHUB_TOKEN starts no workflow by itself. A pull request from a fork
+# gets no write token, so its author runs `just repin`.
+
+on:
+  pull_request:
+    paths:
+      - tools/tools.yml
+      - images/*/image.yml
+
+permissions: {}
+
+env:
+  JUST_VERSION: 1.59.0
+
+jobs:
+  repin:
+    name: Repin the pull request branch
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: write # to commit the pins to the pull request's branch
+      actions: write # to start CI and the image workflows on that commit
+    concurrency:
+      group: pins-${{ github.head_ref }}
+      cancel-in-progress: true
+    steps:
+      - name: Check out the branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.head_ref }}
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+
+      - name: Repin
+        run: uvx --from "rust-just==${JUST_VERSION}" just repin
+
+      - name: Commit the pins and start the checks
+        env:
+          BRANCH: ${{ github.head_ref }}
+          GH_TOKEN: ${{ github.token }}
+        run: uvx --from "rust-just==${JUST_VERSION}" just push-pins "$BRANCH"

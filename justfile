@@ -41,6 +41,14 @@ pin-audit *images: deps
 pin-tools *tools: deps
     {{ images }} pin-tools {{ tools }}
 
+# Bring every pin up to date with its version, as a Renovate pull request needs: tool SHA-256s and Python locks, audit content and READMEs. The Pins workflow runs it on Renovate's branches.
+repin: deps
+    scripts/repin.sh
+
+# For the Pins workflow: commit what `just repin` changed to a pull request's branch, signed by GitHub, and start the checks on it.
+push-pins branch:
+    scripts/push-pins.sh '{{ branch }}'
+
 # Write each image's README from its image.yml, hardening files and exceptions.
 docs:
     {{ images }} docs

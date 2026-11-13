@@ -21,6 +21,8 @@ Notable changes to these images and their build. The format follows [Keep a Chan
 - Role images: an image can name a golden image as its `base` and add tools. It starts from the base's finished disk, keeps its hardening, and is audited with the base's gate and exceptions. `azdo-agent-ubuntu-24.04` is the first, for Azure DevOps scale set agents, with its own workflow.
 - The tool catalogue, `tools/tools.yml`, with four install methods (distribution packages, SHA-256 pinned release archives, Python applications in their own environments from hash-locked requirements, and Terraform through tenv), `just pin-tools`, and Renovate for the versions. The test runs each tool as an unprivileged user and checks the pinned version.
 - Podman, with the docker command, in both golden images, installed before the harden step.
+- `azdo-agent-rhel-9`, the same Azure DevOps agent image on `rhel-9`, with its own workflow.
+- The Pins workflow: on Renovate's pull requests it runs `just repin`, which pins each new tool version's SHA-256 or Python lock and each new role's audit content, commits that to the branch as one commit GitHub signs, and starts the checks on it.
 
 ### Changed
 
@@ -31,3 +33,4 @@ Notable changes to these images and their build. The format follows [Keep a Chan
 - Both golden images keep the overlay module loadable for podman (EX-002, decided again on 13 November 2026).
 - CIS controls that stop the images running containers are not applied, and are listed in the README: `ubuntu-24.04` does not apply 1.3.1.3, which moves every AppArmor profile into complain mode, in which no container runs (EX-018). Package tools install without recommends on Debian.
 - The finalise script removes the sudo rule cloud-init writes for the build account, and the test checks no sudo rule names it.
+- `ubuntu-24.04` allows SSH out as well as DNS, HTTP, HTTPS and NTP, so git and Ansible work over SSH, and the agent image's test checks it reaches github.com on port 22.

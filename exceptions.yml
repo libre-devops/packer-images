@@ -131,7 +131,8 @@ exceptions:
       ubuntu-24.04: [4.2.5]
     reason: >-
       The firewall denies outbound traffic except DNS, HTTP, HTTPS and NTP,
-      the lockdown role's default port list. Review it against your policy.
+      the lockdown role's default port list, and SSH, which the image adds so
+      git and Ansible can work over SSH. Review it against your policy.
     decided_by: Craig Thacker
     decided_on: 2026-11-11
     review_by: 2027-05-11

@@ -21,8 +21,9 @@
       register: tools_cloud_init
       changed_when: false
       # 2 means it finished with recoverable errors; the test checks the
-      # finished image's first boot.
-      failed_when: tools_cloud_init.rc not in [0, 2]
+      # finished image's first boot. On Red Hat the base step has disabled
+      # cloud-init for the rest of the build by then.
+      failed_when: tools_cloud_init.rc not in [0, 2] and 'disabled' not in tools_cloud_init.stdout
 
     - name: Install each tool
       when: image_tools | length > 0
