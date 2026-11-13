@@ -113,6 +113,7 @@ ANSIBLE_CONFIG="$repo/ansible.cfg" ansible-playbook \
 	-e ansible_port="$port" -e ansible_user=tester -e ansible_ssh_private_key_file="$workdir/test_key" \
 	-e ansible_become_password="$password" \
 	-e "@$workdir/hardening.yml" \
+	-e "@$workdir/tools.yml" \
 	-e image_target="$target" \
 	-e verify_audit_archive="$("${images[@]}" audit-archive "$image")" \
 	-e verify_audit_output="$out/audit/" \

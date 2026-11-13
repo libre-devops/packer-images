@@ -1,0 +1,73 @@
+---
+# Method `python`: a Python application in its own virtual environment,
+# /opt/<tool>, on the base image's Python. uv installs it from the
+# hash-locked requirements in tools/locks/: wheels only, every package and
+# hash pinned, nothing resolved at build time. The environment has no pip, so
+# nothing can be added to it later by accident.
+- name: "Copy the locked requirements for {{ tool.name }}"
+  ansible.builtin.copy:
+    src: "{{ tool.lock }}"
+    dest: "{{ tools_downloads }}/{{ tool.name }}.txt"
+    owner: root
+    group: root
+    mode: "0600"
+
+- name: "Create the environment for {{ tool.name }}"
+  ansible.builtin.command:
+    argv: ["{{ tools_bin }}/uv", venv, --no-config, --python, "{{ tool.interpreter }}", "/opt/{{ tool.name }}"]
+    creates: "/opt/{{ tool.name }}/bin/python"
+  environment:
+    UV_PYTHON_DOWNLOADS: never
+
+- name: "Install from the locked requirements {{ tool.name }} {{ tool.version }}"
+  ansible.builtin.command:
+    argv:
+      - "{{ tools_bin }}/uv"
+      - pip
+      - install
+      - --no-config
+      - --no-cache
+      - --python
+      - "/opt/{{ tool.name }}/bin/python"
+      - --require-hashes
+      - --no-deps
+      - --only-binary
+      - ":all:"
+      - --requirement
+      - "{{ tools_downloads }}/{{ tool.name }}.txt"
+  environment:
+    UV_PYTHON_DOWNLOADS: never
+  register: tools_python_install
+  changed_when: "'Installed' in tools_python_install.stderr"
+
+# The hardened umask is 027, so what uv writes is not readable by the users
+# who run the tool.
+- name: "Make readable by every user {{ tool.name }}"
+  ansible.builtin.file:
+    path: "/opt/{{ tool.name }}"
+    owner: root
+    group: root
+    mode: u=rwX,go=rX
+    recurse: true
+
+- name: "Link the commands into /usr/local/bin for {{ tool.name }}"
+  ansible.builtin.file:
+    src: "/opt/{{ tool.name }}/bin/{{ item }}"
+    dest: "{{ tools_bin }}/{{ item }}"
+    state: link
+  loop: "{{ tool.commands | default([]) }}"
+
+# -I: the environment's own packages only, never the user's site packages,
+# PYTHONPATH or the working directory.
+- name: "Install the module commands for {{ tool.name }}"
+  ansible.builtin.copy:
+    content: |
+      #!/bin/sh
+      exec /opt/{{ tool.name }}/bin/python -I -m {{ item.value }} "$@"
+    dest: "{{ tools_bin }}/{{ item.key }}"
+    owner: root
+    group: root
+    mode: "0755"
+  loop: "{{ (tool.modules | default({})) | dict2items }}"
+  loop_control:
+    label: "{{ tools_bin }}/{{ item.key }}"

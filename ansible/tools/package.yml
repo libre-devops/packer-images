@@ -1,0 +1,20 @@
+---
+# Method `package`: from the base image's own signed repositories. The base
+# step upgrades every package at every build, so these are always patched.
+#
+# On Debian, without recommended packages, so an image has only what the
+# catalogue names. Ubuntu's recommends reach well past what a tool needs:
+# podman's pull in passt, whose AppArmor profile the lockdown role's
+# aa-complain cannot parse, which fails CIS 1.3.1.3.
+- name: "Install the packages for {{ tool.name }}"
+  when: ansible_facts['os_family'] == 'Debian'
+  ansible.builtin.apt:
+    name: "{{ tool.packages.Debian }}"
+    state: present
+    install_recommends: false
+
+- name: "Install the packages for {{ tool.name }}"
+  when: ansible_facts['os_family'] != 'Debian'
+  ansible.builtin.package:
+    name: "{{ tool.packages[ansible_facts['os_family']] }}"
+    state: present

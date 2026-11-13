@@ -1,0 +1,48 @@
+---
+name: azdo-agent-ubuntu-24.04
+
+# This image's pipeline: on a change to anything it is built from, its base
+# image included, weekly so it picks up security updates, and by hand. It
+# builds its base, ubuntu-24.04, first, in the same job.
+
+on:
+  push:
+    branches: [main]
+    paths: &paths
+      - images/azdo-agent-ubuntu-24.04/**
+      - images/ubuntu-24.04/**
+      - tools/**
+      - keys/**
+      - ansible/**
+      - scripts/**
+      - exceptions.yml
+      - ansible.cfg
+      - requirements.yml
+      - versions.yml
+      - pyproject.toml
+      - uv.lock
+      - .github/workflows/image.yml
+      - .github/workflows/azdo-agent-ubuntu-24.04.yml
+  pull_request:
+    paths: *paths
+  schedule:
+    - cron: "0 5 * * 0"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: azdo-agent-ubuntu-24.04-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  qemu:
+    name: QEMU
+    permissions:
+      contents: read
+    # The self-repository form: always this commit's copy, never the checkout's.
+    uses: $/.github/workflows/image.yml
+    with:
+      image: azdo-agent-ubuntu-24.04
+      base: ubuntu-24.04
+      target: qemu

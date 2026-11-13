@@ -1,0 +1,45 @@
+---
+# One tool: the files it takes from this repository, its method, then its
+# configuration. Included by tools.yml with `tool`, one rendered catalogue entry.
+- name: "Create the directories for the repository files for {{ tool.name }}"
+  ansible.builtin.file:
+    path: "{{ item | dirname }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop: "{{ (tool.repo_files | default({})) | list }}"
+
+- name: "Install the files from this repository for {{ tool.name }}"
+  ansible.builtin.copy:
+    src: "{{ item.value }}"
+    dest: "{{ item.key }}"
+    owner: root
+    group: root
+    mode: "0644"
+  loop: "{{ (tool.repo_files | default({})) | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+
+- name: "Install {{ tool.name }}"
+  ansible.builtin.include_tasks: "{{ tool.method }}.yml"
+
+- name: "Create the directories for the configuration of {{ tool.name }}"
+  ansible.builtin.file:
+    path: "{{ item | dirname }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop: "{{ (tool.configure | default({})) | list }}"
+
+- name: "Configure {{ tool.name }}"
+  ansible.builtin.copy:
+    content: "{{ item.value }}"
+    dest: "{{ item.key }}"
+    owner: root
+    group: root
+    mode: "0644"
+  loop: "{{ (tool.configure | default({})) | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"

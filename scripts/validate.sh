@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Runs `packer validate` for every target of an image, with variables rendered
-# exactly as a build renders them.
+# exactly as a build renders them. A role image's base need not be built:
+# validation never reads its disk.
 #
 # Usage: scripts/validate.sh <image>
 
@@ -18,6 +19,6 @@ ssh-keygen -q -t ed25519 -N '' -f "$workdir/key"
 
 packer init "$repo/images/$image" >/dev/null
 for target in $("${images[@]}" targets "$image"); do
-	"${images[@]}" render "$image" "$target" --workdir "$workdir" --output "$workdir/out" --ssh-key "$workdir/key"
+	"${images[@]}" render "$image" "$target" --workdir "$workdir" --output "$workdir/out" --ssh-key "$workdir/key" --placeholder-base
 	packer validate -only="$image.$target.image" -var-file="$workdir/build.pkrvars.json" "$repo/images/$image"
 done

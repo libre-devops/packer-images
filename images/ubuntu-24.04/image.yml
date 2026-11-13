@@ -10,6 +10,11 @@ name: ubuntu-24.04
 description: Ubuntu 24.04 LTS Server (minimal), hardened to CIS Level 1 Server
 family: linux
 
+# Tools from tools/tools.yml, installed before the harden step. podman is
+# here because containers are the basis of most builds, and its storage
+# needs the overlay module kept loadable (EX-002).
+tools: [podman]
+
 iso:
   # Tried in order. Canonical moves a point release to old-releases once it is
   # superseded, so the second URL keeps an old pin buildable.

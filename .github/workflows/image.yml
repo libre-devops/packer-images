@@ -2,7 +2,8 @@
 name: Image
 
 # Reusable: build one image for one target, boot it as a new VM, check it and
-# run the CIS audit gate. Each image has its own workflow that calls this one,
+# run the CIS audit gate. A role image's job builds its base image first, in
+# the same job, because it starts from the base's finished disk. Each image has its own workflow that calls this one,
 # so every image has its own pipeline, triggers and history, and the steps are
 # defined once. Every step is the just recipe a local run would use.
 
@@ -17,6 +18,10 @@ on:
         description: The Packer source type to build. Only qemu runs in CI for now.
         type: string
         default: qemu
+      base:
+        description: For a role image, the golden image it builds on, which this job builds first.
+        type: string
+        default: ""
 
 permissions: {}
 
@@ -50,6 +55,14 @@ jobs:
 
       - name: Install uv
         uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+
+      - name: Build the base image
+        if: inputs.base != ''
+        env:
+          BASE: ${{ inputs.base }}
+          TARGET: ${{ inputs.target }}
+          PACKER_GITHUB_API_TOKEN: ${{ github.token }}
+        run: uvx --from "rust-just==${JUST_VERSION}" just build "$BASE" "$TARGET"
 
       - name: Build
         env:

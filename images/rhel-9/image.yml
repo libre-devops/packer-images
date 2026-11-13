@@ -17,6 +17,11 @@ notes:
     come, will start from Red Hat's own pay-as-you-go images. The work to
     install from RHEL itself is in docs/rhel.md.
 
+# Tools from tools/tools.yml, installed before the harden step. podman is
+# here because containers are the basis of most builds, and its storage
+# needs the overlay module kept loadable (EX-002).
+tools: [podman]
+
 iso:
   # Tried in order. AlmaLinux moves a point release to the vault once it is
   # superseded, so the second URL keeps an old pin buildable. The SHA-256 is

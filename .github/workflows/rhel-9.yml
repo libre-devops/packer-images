@@ -9,6 +9,7 @@ on:
     branches: [main]
     paths: &paths
       - images/rhel-9/**
+      - tools/**
       - ansible/**
       - scripts/**
       - exceptions.yml

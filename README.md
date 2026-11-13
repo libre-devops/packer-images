@@ -18,7 +18,7 @@ Golden VM images built with Packer and configured with Ansible. Each image is in
 
 ---
 
-> **Status:** both images build, boot as a new VM and pass their audit gate under QEMU with KVM, run locally on 13 November 2026. `ubuntu-24.04`: 591 audit checks, 582 passed, 1 skipped and 8 failed. `rhel-9`: 622 checks, 608 passed, 3 skipped and 11 failed. Every failure is covered by an exception in the registry, and each VM built its own AIDE database on first boot. The GitHub Actions workflows have not run yet, because the repository is not on GitHub yet. No images are published, and there are no cloud targets yet.
+> **Status:** all three images build, boot as a new VM and pass their audit gate under QEMU with KVM, run locally on 13 November 2026, each with podman running a rootless container as an unprivileged user. `ubuntu-24.04`: 589 audit checks, 580 passed, 1 skipped and 8 failed, with 1.3.1.3 not applied so containers run (see [Hardening skipped so the images work](#hardening-skipped-so-the-images-work)). `rhel-9`: 622 checks, 608 passed, 3 skipped and 11 failed. `azdo-agent-ubuntu-24.04`, built on `ubuntu-24.04`, matches its base exactly, so its tools cost no CIS control, and every tool runs as an unprivileged user at its pinned version. Every failure is covered by an exception in the registry. `ubuntu-24.04` and `rhel-9` passed on GitHub's runners the same day, before podman and the role images were added. No images are published, and there are no cloud targets yet.
 
 ## Images
 
@@ -26,27 +26,29 @@ Golden VM images built with Packer and configured with Ansible. Each image is in
 |---|---|---|---|
 | [`ubuntu-24.04`](./images/ubuntu-24.04) | `qemu` | CIS Ubuntu Linux 24.04 LTS v1.0.0, Level 1 Server, with [UBUNTU24-CIS](https://github.com/ansible-lockdown/UBUNTU24-CIS) | [`ubuntu-24.04.yml`](./.github/workflows/ubuntu-24.04.yml) |
 | [`rhel-9`](./images/rhel-9) | `qemu` (AlmaLinux 9) | CIS Red Hat Enterprise Linux 9 v2.0.0, Level 1 Server, with [RHEL9-CIS](https://github.com/ansible-lockdown/RHEL9-CIS) | [`rhel-9.yml`](./.github/workflows/rhel-9.yml) |
+| [`azdo-agent-ubuntu-24.04`](./images/azdo-agent-ubuntu-24.04) | `qemu` | As its base, `ubuntu-24.04`: a role image for Azure DevOps scale set agents | [`azdo-agent-ubuntu-24.04.yml`](./.github/workflows/azdo-agent-ubuntu-24.04.yml) |
 
 The `rhel-9` image's QEMU target installs AlmaLinux 9, which is built from the same sources as RHEL 9 and which RHEL9-CIS supports, because the RHEL ISO needs a Red Hat login and a subscription to patch. The work to build it from RHEL itself is in [`docs/rhel.md`](./docs/rhel.md). Its cloud targets, when they come, will start from Red Hat's own images.
 
-Planned, in this order: Windows Server 2025 and Windows 11 as golden images, each hardened with its ansible-lockdown role (Windows-2025-CIS, Windows-11-CIS). Then role images built on top of them, such as Azure DevOps agents and Azure Virtual Desktop hosts. Then the Azure Compute Gallery and AWS AMI targets.
+The golden images are the Linux bases; `azdo-agent-ubuntu-24.04` is the first role image built on one (see [Role images and tools](#role-images-and-tools)). Planned: the Azure Compute Gallery target, with Terraform for the gallery and the build, then the AWS AMI target; Windows Server 2025 and Windows 11 golden images, each hardened with its ansible-lockdown role (Windows-2025-CIS, Windows-11-CIS); and more role images, such as Azure Virtual Desktop hosts.
 
 ## How a build works
 
-Every image goes through the same steps. Packer only starts the VM and runs the playbooks; Ansible does all the configuration.
+Every golden image goes through the same steps. Packer only starts the VM and runs the playbooks; Ansible does all the configuration. A role image skips the install and the harden step: see [Role images and tools](#role-images-and-tools).
 
 | Step | Where | What it does |
 |---|---|---|
 | Install | the image's `qemu.pkr.hcl`, with `autoinstall/` (Ubuntu) or `kickstart/` (Red Hat family) | Boots the pinned ISO with UEFI and installs unattended, with an LVM volume for each path CIS asks to be its own partition. Creates a build account with an SSH key made for this build only and a random password used only for `sudo`. |
 | Base | [`ansible/base.yml`](./ansible/base.yml) | Waits for first boot, applies every update, adds cloud-init where the installer did not and the target's guest agent, and reboots into the upgraded system. |
+| Tools | [`ansible/tools.yml`](./ansible/tools.yml) | Installs the tools the image's `image.yml` lists, from the catalogue in [`tools/tools.yml`](./tools/tools.yml), such as podman. Before the harden step, so the lockdown role hardens them with the rest of the system. |
 | Harden | [`ansible/harden.yml`](./ansible/harden.yml) | Runs the pinned lockdown role with the image's hardening profile and the profile's tag, such as `level1-server`. Then blocks every filesystem kernel module the image does not use or keep, and sets the firewall services the image allows, where the profile lists them: two controls the lockdown roles only report on. |
 | Generalise | [`ansible/generalise.yml`](./ansible/generalise.yml) | Removes the installer's logs and copies of its answers, and its cloud-init and network configuration. Cleans the package cache, sets AIDE to make a new database on each VM's first boot, and installs the finalise script. |
 | Finalise | Packer's shutdown command | Deletes the build account, resets cloud-init, the machine ID, the SSH host keys and the random seed, empties the logs, trims free space and powers off. Packer then compresses the disk and writes its SHA-256. |
-| Test | [`scripts/test.sh`](./scripts/test.sh), [`ansible/verify.yml`](./ansible/verify.yml) | Boots the image on a throwaway overlay disk with a cloud-init seed, as a platform would start a VM. Checks the first boot succeeded with no failed units, AIDE made the VM's own database, and nothing of the build is left. Then runs the pinned audit content through the lockdown role's audit-only mode. |
+| Test | [`scripts/test.sh`](./scripts/test.sh), [`ansible/verify.yml`](./ansible/verify.yml) | Boots the image on a throwaway overlay disk with a cloud-init seed, as a platform would start a VM. Checks the first boot succeeded with no failed units, AIDE made the VM's own database, and nothing of the build is left, not even a sudo rule. Runs every tool's check as an unprivileged user and checks it is the pinned version. Then runs the pinned audit content through the lockdown role's audit-only mode. |
 | Gate | `scripts/images.py gate` | Checks the audit report against the exception registry (see [Exceptions](#exceptions)) and writes `audit/summary.md`. |
 
 ```text
-pinned ISO ─► install ─► base ─► harden ─► generalise ─► finalise ─► qcow2 + SHA-256
+pinned ISO ─► install ─► base ─► tools ─► harden ─► generalise ─► finalise ─► qcow2 + SHA-256
    ─► boot as a new VM ─► check generalised ─► audit ─► gate
 ```
 
@@ -62,6 +64,26 @@ The output lands in `output/<image>/<target>/`:
 | `packer-manifest.json` | Packer's build manifest. |
 | `audit/` | The goss report, the gate's summary and the test VM's console log. |
 
+## Role images and tools
+
+A role image is a golden image with tools added for one job, such as an Azure DevOps agent. Its `image.yml` names a golden image as its `base` and lists its `tools`, and it has no ISO and no hardening of its own. The build starts from the base's finished qcow2 and boots it with a cloud-init seed that makes the build account, as a platform gives a new VM its first user. Then it runs the base, tools and generalise steps. It does not harden a second time: the test audits the result with the base's audit content and gate, and the base's exceptions apply, so a tool that weakens the hardening fails the build. A role image can add exceptions of its own.
+
+```text
+base image's qcow2 ─► boot with a seed ─► base ─► tools ─► generalise ─► finalise ─► qcow2 + SHA-256
+   ─► boot as a new VM ─► check generalised ─► check each tool ─► audit ─► gate
+```
+
+Every tool is defined once in [`tools/tools.yml`](./tools/tools.yml), with a method:
+
+| Method | How it installs | How it is pinned |
+|---|---|---|
+| `package` | From the base image's own signed repositories. | Not by version: the base step upgrades every package at every build, so the OS vendor patches it. |
+| `archive` | A release archive; only the binaries it names go to `/usr/local/bin`. | Version, and the archive's SHA-256, checked against the vendor's checksums when pinned. |
+| `python` | Its own virtual environment under `/opt`, on the base image's Python, by uv, with no pip in it. | Version, and hash-locked requirements in `tools/locks/`: every package and hash, wheels only. |
+| `tenv` | Through tenv, which checks HashiCorp's signature with the key this repository pins. | Version. |
+
+Adding a tool is an entry in the catalogue, `just pin-tools <tool>`, and its name in an image's `tools`. Renovate bumps the versions; `just pin-tools` on its branch pins the new hashes. Everything installs as root and readable by every user, because the hardened umask is 027, and the test runs each tool's `check` as an unprivileged user and wants the pinned version in its output.
+
 ## Hardening
 
 Each image's `hardening/` folder is the whole record of how it applies its lockdown role:
@@ -70,6 +92,15 @@ Each image's `hardening/` folder is the whole record of how it applies its lockd
 - `<target>.yml`, one per Packer source type, adds or overrides settings for that target only. Cloud images cannot have the separate partitions an ISO install gives, for example.
 
 `just validate` refuses a setting with no reason, a duplicate, or a variable the pinned role does not have, so a variable renamed in a new role release cannot silently stop applying. It also refuses a setting that switches a CIS control off without naming its exception, and one that switches off a whole section. The audit checks the controls the role was asked to apply, because the role writes the audit's variables from its own, so a control switched off silently would also vanish from the audit.
+
+### Hardening skipped so the images work
+
+The images do not apply a CIS control where it stops something they exist to do. Running containers is one: build agents and most workloads depend on it. Such a control is switched off in the hardening profile, or left out of the harden step's own blocking, and recorded as an exception that says what it would break and how that was proven, so it is never applied and then quietly worked around. The audit then skips a switched-off control, and the image's README lists it as switched off. So far:
+
+| Control | Images | What applying it breaks | Exception |
+|---|---|---|---|
+| Unused filesystem kernel modules blocked (1.1.1.10 on Ubuntu, 1.1.1.9 on RHEL) | both | The `overlay` module stays loadable: podman's storage driver needs it for every container. | [EX-002](./exceptions.yml) |
+| Every AppArmor profile in enforce or complain mode (1.3.1.3) | `ubuntu-24.04` | The role moves every profile into complain mode, in which podman and crun cannot run any container, and logs no denial. AppArmor stays as Ubuntu ships it. | [EX-018](./exceptions.yml) |
 
 Each image's README, such as [`images/rhel-9`](./images/rhel-9), lists its pins, its changes to the role's defaults and its exceptions. `just docs` writes it from the files above and the registry, and `just validate` fails if it is out of date.
 
@@ -136,6 +167,7 @@ With KVM, a build takes 8 to 15 minutes and the test a few more on a 32 core mac
 | `just gate <image> [target]` | Re-runs the gate on the last audit report, for example after editing `exceptions.yml`. |
 | `just exceptions` | Lists the exception registry, soonest review first. |
 | `just docs` | Writes each image's README from its `image.yml`, `hardening/` and the exception registry. |
+| `just pin-tools [tool...]` | Pins the tools in `tools/tools.yml`: each archive's SHA-256, checked against the vendor's checksums, and each Python tool's hash-locked requirements. Run it after Renovate bumps a tool. |
 | `just pin-audit [image...]` | Pins each image's audit content to the commit that matches its role release. Run it after a role bump. |
 | `just secrets` | Scans the full git history with gitleaks. |
 | `just clean [image]` | Deletes build output. |
@@ -157,8 +189,9 @@ images/<image>/
   hardening/           common.yml and one file per target
   README.md            written by `just docs`
 exceptions.yml         the CIS exception registry
+tools/                 tools.yml, the tool catalogue, and locks/, the Python tools' hash-locked requirements
 docs/                  longer notes and plans, such as building rhel-9 from RHEL
-ansible/               base, harden, generalise and verify playbooks
+ansible/               base, tools, harden, generalise and verify playbooks; tools/ holds a task file per tool method
 scripts/               images.py (pins, rendering, validation, gate), build, test and validate scripts
 keys/                  HashiCorp's release signing key, which `just tools` checks Packer with
 versions.yml           pinned tools

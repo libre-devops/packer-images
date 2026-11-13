@@ -11,6 +11,16 @@ build {
     extra_arguments  = concat(local.ansible_extra_arguments, ["--extra-vars", "image_target=${source.type}"])
   }
 
+  # Tools: the ones image.yml lists, from tools/tools.yml, before the harden
+  # step, so the lockdown role hardens them with the rest of the system.
+  provisioner "ansible" {
+    playbook_file    = "${local.ansible_dir}/tools.yml"
+    user             = var.build_username
+    use_proxy        = false
+    ansible_env_vars = local.ansible_env_vars
+    extra_arguments  = concat(local.ansible_extra_arguments, ["--extra-vars", "image_target=${source.type}", "--extra-vars", "@${var.tools_vars_file}"])
+  }
+
   # Harden: the pinned ansible-lockdown role, with this image's profile.
   provisioner "ansible" {
     playbook_file    = "${local.ansible_dir}/harden.yml"

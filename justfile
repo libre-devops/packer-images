@@ -37,6 +37,10 @@ deps:
 pin-audit *images: deps
     {{ images }} pin-audit {{ images }}
 
+# Pin the tools in tools/tools.yml (after a Renovate bump): each archive's SHA-256, checked against the vendor's checksums, and each Python tool's hash-locked requirements: just pin-tools uv
+pin-tools *tools: deps
+    {{ images }} pin-tools {{ tools }}
+
 # Write each image's README from its image.yml, hardening files and exceptions.
 docs:
     {{ images }} docs

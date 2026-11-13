@@ -32,6 +32,10 @@ variable "hardening_vars_file" {
   description = "The hardening profile rendered from hardening/common.yml and the target's file."
 }
 
+variable "tools_vars_file" {
+  type        = string
+  description = "The tools image.yml lists, rendered from tools/tools.yml."
+}
 variable "hardening_tags" {
   type        = string
   description = "The CIS profile, as the lockdown role tag that selects its controls."

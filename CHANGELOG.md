@@ -18,6 +18,9 @@ Notable changes to these images and their build. The format follows [Keep a Chan
 - The CIS exception registry, `exceptions.yml`: every control an image does not meet, as a decision with a kind (`deviation`, `manual` or `false-positive`), risk, reason, mitigation, owner, decision date and review date. `just validate` checks each entry and checks it against the images and their pinned roles. The gate fails on any failure no entry covers, on an entry whose control now passes, on a review that is overdue, and on findings beyond what an entry accepts. `just exceptions` lists the registry.
 - The harden step blocks every filesystem kernel module an image does not use or keep, and sets the services the default firewall zone allows where the profile lists them (`firewall_services`), two controls the lockdown roles only report on.
 - Each VM re-initialises AIDE on its first boot, so its database describes the VM rather than the build.
+- Role images: an image can name a golden image as its `base` and add tools. It starts from the base's finished disk, keeps its hardening, and is audited with the base's gate and exceptions. `azdo-agent-ubuntu-24.04` is the first, for Azure DevOps scale set agents, with its own workflow.
+- The tool catalogue, `tools/tools.yml`, with four install methods (distribution packages, SHA-256 pinned release archives, Python applications in their own environments from hash-locked requirements, and Terraform through tenv), `just pin-tools`, and Renovate for the versions. The test runs each tool as an unprivileged user and checks the pinned version.
+- Podman, with the docker command, in both golden images, installed before the harden step.
 
 ### Changed
 
@@ -25,3 +28,6 @@ Notable changes to these images and their build. The format follows [Keep a Chan
 - A setting that switches a CIS control off must name its exception, and one that switches off a whole section is refused.
 - The test seed gives its user a sudo rule rather than an admin group, so it works on every family.
 - The finalise script also removes the random seed and the DNF cache.
+- Both golden images keep the overlay module loadable for podman (EX-002, decided again on 13 November 2026).
+- CIS controls that stop the images running containers are not applied, and are listed in the README: `ubuntu-24.04` does not apply 1.3.1.3, which moves every AppArmor profile into complain mode, in which no container runs (EX-018). Package tools install without recommends on Debian.
+- The finalise script removes the sudo rule cloud-init writes for the build account, and the test checks no sudo rule names it.

@@ -1,0 +1,63 @@
+---
+# Build step: install the image's tools from the catalogue, tools/tools.yml,
+# as scripts/images.py rendered them (image_tools), in order, each after the
+# tools it requires. A golden image runs this before the harden step, so the
+# lockdown role hardens the tools with the rest of the system; a role image
+# runs it on its base's finished, hardened system.
+- name: Install the image's tools
+  hosts: all
+  become: true
+  gather_facts: true
+  vars:
+    tools_bin: /usr/local/bin
+    # On /var, which is not noexec, and root's alone.
+    tools_downloads: /var/cache/image-tools
+    # Every tool's environment, merged by scripts/images.py, for
+    # /etc/environment and for the steps that run a tool during the build.
+    tools_environment: "{{ image_environment }}"
+  tasks:
+    - name: Wait for cloud-init to finish the first boot
+      ansible.builtin.command: cloud-init status --wait
+      register: tools_cloud_init
+      changed_when: false
+      # 2 means it finished with recoverable errors; the test checks the
+      # finished image's first boot.
+      failed_when: tools_cloud_init.rc not in [0, 2]
+
+    - name: Install each tool
+      when: image_tools | length > 0
+      block:
+        - name: Create the download directory
+          ansible.builtin.file:
+            path: "{{ tools_downloads }}"
+            state: directory
+            owner: root
+            group: root
+            mode: "0700"
+
+        - name: Install each tool by its method
+          ansible.builtin.include_tasks: tools/install.yml
+          loop: "{{ image_tools }}"
+          loop_control:
+            loop_var: tool
+            label: "{{ tool.name }}"
+
+        # Azure DevOps scale set agents read /etc/environment, and PAM gives
+        # it to every login.
+        - name: Set the tools' environment for every session
+          ansible.builtin.lineinfile:
+            path: /etc/environment
+            regexp: "^{{ item.key }}="
+            line: "{{ item.key }}={{ item.value }}"
+            owner: root
+            group: root
+            mode: "0644"
+          loop: "{{ tools_environment | dict2items }}"
+          loop_control:
+            label: "{{ item.key }}"
+
+      always:
+        - name: Remove the downloads
+          ansible.builtin.file:
+            path: "{{ tools_downloads }}"
+            state: absent

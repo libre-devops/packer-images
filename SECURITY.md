@@ -18,6 +18,11 @@ Every input is pinned and checked before it is used:
 | goss, the audit binary | the lockdown role's defaults | SHA-256, by the role. The lockdown roles download it from `github.com/krameff/goss`, a fork of goss the lockdown team uses, not from `goss-org/goss`. |
 | Ansible collections | `requirements.yml` | versions from Galaxy |
 | Python tools | `uv.lock` | hashes, by `uv sync --locked` |
+| A role image's base | the base image's own build | SHA-256, by Packer, from the base build's `image.sha256`; the base's build record is copied into the role image's `image.json` |
+| Tools from distribution packages (`package`) | not by version | the base image's package manager, against the distribution's signing keys; upgraded at every build |
+| Tools from release archives (`archive`) | `tools/tools.yml`, version and SHA-256 | SHA-256, by Ansible, before unpacking. `just pin-tools` takes the hash from the downloaded archive and refuses it unless the vendor's published checksums agree |
+| Python tools in images (`python`) | `tools/tools.yml` and `tools/locks/` | every package's hash, by `uv pip install --require-hashes`, wheels only, nothing resolved at build time |
+| Terraform through tenv (`tenv`) | `tools/tools.yml` | tenv checks the SHA-256 and HashiCorp's signature on the checksums, with the key from `keys/hashicorp.asc` rather than one fetched at install time |
 
 ## The build account
 
@@ -25,7 +30,7 @@ The installer creates a build account with an SSH key made for that build only a
 
 ## Hardening exceptions
 
-Every CIS control an image does not meet is recorded in [`exceptions.yml`](./exceptions.yml) with its reason, risk, mitigation and review date, and each image's README lists its own. The build fails on an audit failure the registry does not cover and on an exception past its review date. Report a weakness in an exception's reasoning the same way as any other vulnerability.
+Every CIS control an image does not meet is recorded in [`exceptions.yml`](./exceptions.yml) with its reason, risk, mitigation and review date, and each image's README lists its own. Controls that would stop the images running containers are not applied at all, rather than applied and worked around; the README lists them under "Hardening skipped so the images work". The build fails on an audit failure the registry does not cover and on an exception past its review date. Report a weakness in an exception's reasoning the same way as any other vulnerability.
 
 ## Images
 

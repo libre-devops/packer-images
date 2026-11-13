@@ -6,15 +6,21 @@ Context for working in this repository. Read this before making changes.
 
 Golden VM images for Libre DevOps, built with Packer and configured with Ansible. Each image is installed from a pinned vendor ISO (or, later, a cloud marketplace image), patched, hardened with the matching ansible-lockdown CIS role, generalised, then booted as a new VM and audited before anything trusts it.
 
-Built so far, for the `qemu` target: `ubuntu-24.04`, and `rhel-9` (RHEL9-CIS, installed from the AlmaLinux 9 minimal ISO, since the RHEL ISO needs a Red Hat login and a subscription to patch).
+Built so far, for the `qemu` target: `ubuntu-24.04`, and `rhel-9` (RHEL9-CIS, installed from the AlmaLinux 9 minimal ISO, since the RHEL ISO needs a Red Hat login and a subscription to patch; `docs/rhel.md` is the plan for real RHEL). On those, the first role image: `azdo-agent-ubuntu-24.04`, for Azure DevOps scale set agents.
 
-Planned, in order: Windows Server 2025 (ansible-lockdown Windows-2025-CIS), Windows 11 (Windows-11-CIS). Then role images built from the golden ones: Azure DevOps agents and AVD. Then the cloud targets: `azure-arm` (Compute Gallery) and `amazon-ebs` (AMI). Cloud builds cost money, so they wait until Craig says so.
+On 13 November 2026 Craig moved the Azure DevOps agent image ahead of Windows, and said the QEMU target only proves the code: the cloud images are the product. Next: the `azure-arm` target (Compute Gallery), with Terraform for the gallery and a build VM, then `amazon-ebs` (AMI). Then Windows Server 2025 (ansible-lockdown Windows-2025-CIS) and Windows 11 (Windows-11-CIS), and more role images such as AVD. Cloud builds cost money, so they wait until Craig says so.
 
 ## Hard constraints
 
-**Ansible configures, Packer builds.** A template declares sources and runs `ansible/base.yml`, `harden.yml` and `generalise.yml`. No shell provisioners, no inline scripts, no `-e` or `--skip-tags` in templates.
+**Ansible configures, Packer builds.** A template declares sources and runs the playbooks in `ansible/`: `base.yml`, `tools.yml`, `harden.yml` (golden images only) and `generalise.yml`. No shell provisioners, no inline scripts, no `-e` or `--skip-tags` in templates.
 
 **Hardening is ansible-lockdown, on every OS.** Windows too: Craig asked to keep one toolchain, so HardeningKitty is not used. Never copy a lockdown role or its audit content into the repo. Pin it in `image.yml` to a tag and the commit it must resolve to.
+
+**Role images build on golden images and never harden again.** A role image's `image.yml` names its `base` and lists `tools`, and has no ISO or hardening: it takes the base's role, audit content, profile and exceptions. It starts from the base's finished qcow2 with a cloud-init seed. The test audits it with the base's gate, so a tool that weakens the hardening fails the build; record a role image's own exception only for a failure its tools cause.
+
+**Every tool an image installs comes from `tools/tools.yml`, pinned.** Distribution packages first, since the OS vendor signs and patches them. Otherwise a release archive with its SHA-256 (checked against the vendor's checksums by `just pin-tools`), a Python application from hash-locked wheels in its own `/opt` environment, or Terraform through tenv with the pinned HashiCorp key. No `curl | bash`, no `latest`, no vendor apt or dnf repository without a pinned key, no `chmod 777`, no `safe.directory '*'`, no `TENV_AUTO_INSTALL`. Golden images install their tools before the harden step. Run `just pin-tools` after any version change.
+
+**Do not harden where it stops what the images are for.** Craig, 13 November 2026: where a CIS control most impacts functionality, skip it, document it and make it clear. Running containers is a main use case. Switch such a control off in the hardening profile with an exception that says what it breaks and how that was proven on a test VM, and add it to the README's "Hardening skipped so the images work" table. Never apply a control and then undo or work around it in a later step.
 
 **Every deviation from a lockdown role's defaults is an entry in `hardening/*.yml` with a reason.** `just validate` checks each variable exists in the pinned role.
 
@@ -71,5 +77,13 @@ Planned, in order: Windows Server 2025 (ansible-lockdown Windows-2025-CIS), Wind
 **AlmaLinux's default firewalld zone allows `cockpit`** although Cockpit is not installed. RHEL9-CIS only reports on 4.2.1, so `firewall_services` in the hardening profile sets the zone's services and the harden step applies it.
 
 **The AlmaLinux minimal install has no `tar`**, which the audit needs to unpack its content (the role's unarchive fails with "Unable to find required 'gtar' or 'tar' binary"). `base.yml` installs it on the Red Hat family.
+
+**UBUNTU24-CIS 1.3.1.3 runs `aa-complain /etc/apparmor.d/*`, which fails on any profile noble's AppArmor tools cannot parse.** passt's does not parse (`Operation {'runbindable'} cannot have a source`), and podman recommends passt. So the `package` method installs without recommends on Debian, and a catalogue entry lists what the tool needs (for podman: uidmap, slirp4netns, catatonit, dbus-user-session).
+
+**AppArmor complain mode breaks podman on Ubuntu without logging a denial.** The role's 1.3.1.3 moves Ubuntu's `flags=(unconfined)` profiles to complain. Then the kernel refuses overlayfs its whiteouts and tmpfiles (`kernel does not support overlay fs ... permission denied when we tried to delete an item in the merged directory`, and `overlayfs: upper fs does not support tmpfile` in the kernel log), and crun says `Failed to re-execute libcrun via memory file descriptor`. Proven on 13 November 2026 by switching the two profiles on a `KEEP=1` test VM. So `ubuntu-24.04` does not apply 1.3.1.3 (`ubtu24cis_rule_1_3_1_3: false`, EX-018), and AppArmor stays as Ubuntu ships it.
+
+**Podman caches its overlay self-test.** Root's result is in `/run/containers/storage/overlay/overlay-false`, a user's under their storage, and `podman system reset` cannot clear it while the driver is broken. Delete `/run/containers/storage` and `/var/lib/containers/storage` (or reset as the user) before retesting, or a fix looks as if it failed. The same temporary directory name in the error each time means a cached result.
+
+**overlayfs refuses a lower layer that contains its upper one**, so `podman run --rootfs /:O` fails with `invalid argument` (the upper is under the user's home). The test's podman check overlays `/usr` instead.
 
 **Stopping a Packer build:** send SIGINT to both Packer processes (the `packer build` wrapper and the `.tools/bin/packer` child); the wrapper alone keeps running. Never `pkill -f` with a pattern your own shell's command line contains.

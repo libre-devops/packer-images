@@ -1,0 +1,191 @@
+---
+# The tools role images install, each defined once. A role image lists the
+# ones it wants by name under `tools` in its image.yml, and gets what they
+# require with them.
+#
+# Renovate bumps the lines marked `renovate:`. Then run `just pin-tools` on its
+# branch, which writes each archive's SHA-256 here and each Python tool's
+# hash-locked requirements to tools/locks/. A build installs nothing that does
+# not match its pin.
+#
+# Every tool has a method, an Ansible task file in ansible/tools/:
+#   package   packages from the base image's own signed repositories (on
+#             Debian without recommends, so list what the tool needs), upgraded
+#             at every build, so the OS vendor patches them
+#   archive   a release archive, checked against its pinned SHA-256; the
+#             binaries named in `files` go to /usr/local/bin
+#   python    a Python application in its own virtual environment under /opt,
+#             installed by uv from hash-locked requirements, with no pip in it;
+#             `commands` go to /usr/local/bin
+#   tenv      a Terraform version installed through tenv, which checks
+#             HashiCorp's signature with the key pinned in keys/hashicorp.asc
+#
+# `check` runs as an unprivileged user in the test, and its output must
+# contain the pinned version. `environment` goes to /etc/environment, which
+# Azure DevOps scale set agents read.
+
+tools:
+  # What the Azure Pipelines agent needs at run time. Azure DevOps installs the
+  # agent itself when it adds a VM to the pool, so the image does not.
+  azure-pipelines-agent-deps:
+    method: package
+    description: Libraries the Azure Pipelines agent needs (ICU, Kerberos, zlib)
+    packages:
+      Debian: [libicu74, libkrb5-3, zlib1g]
+      RedHat: [libicu, krb5-libs, zlib]
+
+  # Rootless: CI agents run as an unprivileged user. Its overlay storage
+  # driver needs the overlay module, which the golden images keep loadable
+  # (EX-002). podman-docker adds the docker command for pipelines and tasks
+  # that call it.
+  podman:
+    method: package
+    description: Podman, with the docker command
+    packages:
+      # Debian installs without recommends, so these are what rootless use
+      # needs: subordinate IDs (uidmap), networking (slirp4netns), an init
+      # for --init (catatonit) and a user session bus for cgroups.
+      Debian: [podman, podman-docker, uidmap, slirp4netns, catatonit, dbus-user-session]
+      RedHat: [podman, podman-docker]
+    configure:
+      # Stops the docker command printing a notice every time, which breaks
+      # scripts that read its output.
+      /etc/containers/nodocker: ""
+      # Short names, such as `docker pull alpine`, resolve to Docker Hub only,
+      # as with Docker. With one search registry, a short name can never
+      # resolve to a lookalike image on another registry.
+      /etc/containers/registries.conf.d/50-image-search.conf: |
+        unqualified-search-registries = ["docker.io"]
+    # Runs the VM's own /bin/true in a container, on an overlay of /usr, which
+    # needs user namespaces, subordinate IDs, the overlay module, SELinux or
+    # AppArmor and seccomp to allow it, but no registry. Not / itself:
+    # overlayfs refuses a lower layer that contains its upper one, which
+    # lives in the user's home.
+    check:
+      - podman info
+      - podman run --rm --network none --rootfs /usr:O /bin/true
+    expect: "graphDriverName: overlay"
+
+  podman-compose:
+    method: python
+    description: podman-compose, for Compose files, also as `docker compose`
+    requires: [python, uv, podman]
+    package: podman-compose
+    # renovate: datasource=pypi depName=podman-compose
+    version: 1.6.0
+    commands: [podman-compose]
+    check: podman-compose version
+
+  git:
+    method: package
+    description: Git
+    packages:
+      Debian: [git]
+      RedHat: [git]
+    check: git --version
+
+  jq:
+    method: package
+    description: jq
+    packages:
+      Debian: [jq]
+      RedHat: [jq]
+    check: jq --version
+
+  # The base image's own Python, so the OS vendor patches it. Ubuntu 24.04's
+  # python3 is 3.12; RHEL 9 has 3.12 as a separate package. The python tools
+  # below run on it. A tool that needs a newer Python means moving this to a
+  # pinned uv-managed one.
+  python:
+    method: package
+    description: Python 3.12, the base image's own
+    packages:
+      Debian: [python3, python3-venv]
+      RedHat: [python3.12]
+    interpreter: /usr/bin/python3.12
+    check: python3.12 --version
+
+  uv:
+    method: archive
+    description: uv, the Python package and project manager
+    # renovate: datasource=github-releases depName=astral-sh/uv
+    version: 0.13.7
+    url: https://github.com/astral-sh/uv/releases/download/{version}/uv-x86_64-unknown-linux-gnu.tar.gz
+    checksums: https://github.com/astral-sh/uv/releases/download/{version}/uv-x86_64-unknown-linux-gnu.tar.gz.sha256
+    sha256: "c5221ff41b7892bfc223543883600125f6a47fe845093e0f5bdff4f359196d83"  # 0.13.7
+    files:
+      uv: uv-x86_64-unknown-linux-gnu/uv
+      uvx: uv-x86_64-unknown-linux-gnu/uvx
+    check: uv --version
+
+  azure-cli:
+    method: python
+    description: Azure CLI
+    requires: [python, uv]
+    package: azure-cli
+    # renovate: datasource=pypi depName=azure-cli
+    version: 2.92.0
+    # The az script pip installs finds Python on PATH, so the image runs the
+    # module with its own environment's Python instead.
+    modules:
+      az: azure.cli
+    environment:
+      AZURE_CORE_COLLECT_TELEMETRY: "false"
+    check: az version
+
+  ansible:
+    method: python
+    description: Ansible, with the community collections
+    requires: [python, uv]
+    package: ansible
+    # renovate: datasource=pypi depName=ansible
+    version: 14.6.0
+    commands:
+      - ansible
+      - ansible-community
+      - ansible-config
+      - ansible-console
+      - ansible-doc
+      - ansible-galaxy
+      - ansible-inventory
+      - ansible-playbook
+      - ansible-pull
+      - ansible-test
+      - ansible-vault
+    check: ansible-community --version
+
+  tenv:
+    method: archive
+    description: tenv, the Terraform and OpenTofu version manager
+    # renovate: datasource=github-releases depName=tofuutils/tenv extractVersion=^v(?<version>.+)$
+    version: 4.15.1
+    url: https://github.com/tofuutils/tenv/releases/download/v{version}/tenv_v{version}_Linux_x86_64.tar.gz
+    checksums: https://github.com/tofuutils/tenv/releases/download/v{version}/tenv_v{version}_checksums.txt
+    sha256: "0d931096eefb9d9147bc23f3f29f9bf302a2ee8d3455a86d0171787a7b06bce6"  # 4.15.1
+    # tenv's terraform proxy runs whichever version a project asks for
+    # (.terraform-version, required_version), or the default below.
+    files:
+      tenv: tenv
+      terraform: terraform
+    # HashiCorp's release key, which this repository already pins, so tenv
+    # does not fetch it from hashicorp.com for every install.
+    repo_files:
+      /usr/local/share/keyrings/hashicorp.asc: keys/hashicorp.asc
+    environment:
+      TENV_ROOT: /opt/tenv
+      # Never install a version at job time: a pipeline that needs another
+      # one installs it with `tenv tf install`, which checks the signature.
+      TENV_AUTO_INSTALL: "false"
+      TFENV_HASHICORP_PGP_KEY: /usr/local/share/keyrings/hashicorp.asc
+    check: tenv --version
+
+  terraform:
+    method: tenv
+    description: Terraform, the default version for tenv
+    requires: [tenv]
+    tenv: tf
+    # renovate: datasource=github-releases depName=hashicorp/terraform extractVersion=^v(?<version>.+)$
+    version: 1.17.1
+    environment:
+      CHECKPOINT_DISABLE: "1"
+    check: terraform version

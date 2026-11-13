@@ -70,5 +70,5 @@ firewall_services: [ssh, dhcpv6-client]
 # time and those kept here. Keeping a module is an exception, so `keep` must
 # match the exception's findings. jbd2 is kept because ext4 needs it.
 filesystem_modules:
-  keep: [fat, isofs, jbd2]
+  keep: [fat, isofs, jbd2, overlay]
   exception: EX-002

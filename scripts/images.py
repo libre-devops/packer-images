@@ -1,11 +1,17 @@
 #!/usr/bin/env python3
 """Helpers for the Libre DevOps Packer images.
 
-Every pinned input lives in versions.yml (tools) or images/<name>/image.yml
-(ISO, hardening role, audit content), every hardening setting in
+Every pinned input lives in versions.yml (the build's own tools),
+images/<name>/image.yml (ISO, hardening role, audit content) or tools/tools.yml
+(what role images install), every hardening setting in
 images/<name>/hardening/, and every CIS control an image does not meet in the
 exception registry, exceptions.yml. This script is the only reader of those
 files, so the justfile, the build and test scripts and CI always agree on them.
+
+A golden image installs from an ISO and hardens itself. A role image names a
+golden image as its `base`, starts from its finished disk, and adds tools: it
+takes its hardening role, audit content, profile and exceptions from the base,
+and can add exceptions of its own.
 
 Usage: uv run scripts/images.py <command> [arguments]. Run with --help for the
 commands. EXCEPTIONS_TODAY=YYYY-MM-DD makes the registry checks run as if on
@@ -35,7 +41,15 @@ import yaml
 ROOT = Path(__file__).resolve().parent.parent
 IMAGES = ROOT / "images"
 CACHE = ROOT / ".cache"
+OUTPUT = ROOT / "output"
 REGISTRY = ROOT / "exceptions.yml"
+CATALOGUE = ROOT / "tools" / "tools.yml"
+LOCKS = ROOT / "tools" / "locks"
+
+# How the tools in the catalogue install, each an Ansible task file in
+# ansible/tools/, and the OS families a package tool must name packages for.
+METHODS = ("package", "archive", "python", "tenv")
+FAMILIES = ("Debian", "RedHat")
 
 # The exception registry's rules. An exception is decided for at most a year
 # at a time, and warns a month before its review is due.
@@ -95,12 +109,29 @@ class Image:
         return cls(name, path, load_yaml(path / "image.yml"))
 
     @property
+    def base(self) -> Image | None:
+        """The golden image a role image is built from; None for a golden image."""
+        name = self.spec.get("base")
+        return Image.load(str(name)) if name else None
+
+    @property
+    def golden(self) -> Image:
+        """The image that carries the hardening: this one, or a role image's base."""
+        return self.base or self
+
+    @property
+    def lineage(self) -> list[str]:
+        """The names whose exceptions apply to this image: its own, then its base's."""
+        base = self.base
+        return [self.name, base.name] if base else [self.name]
+
+    @property
     def role(self) -> dict:
-        return self.spec["hardening"]["role"]
+        return self.golden.spec["hardening"]["role"]
 
     @property
     def audit(self) -> dict:
-        return self.spec["hardening"]["audit"]
+        return self.golden.spec["hardening"]["audit"]
 
     @property
     def role_name(self) -> str:
@@ -171,7 +202,8 @@ class Profile:
 
 
 def load_profile(image: Image, target: str) -> Profile:
-    """The CIS profile tag and the merged settings for one target."""
+    """The CIS profile tag and the merged settings for one target. A role image has its base's."""
+    image = image.golden
     hardening = image.path / "hardening"
     common = load_yaml(hardening / "common.yml")
     target_file = hardening / f"{target}.yml"
@@ -249,13 +281,21 @@ class Entry:
         return found
 
 
-def allowed_findings(entry: Entry, image: str) -> list[str] | None:
-    """The findings an entry accepts for an image: one list for all, or a list per image."""
+def image_covers(entry: Entry, image: Image, target: str | None = None) -> list[str]:
+    """The controls an entry covers for an image: its own, and for a role image its base's too."""
+    found: list[str] = []
+    for name in image.lineage:
+        found += [c for c in entry.covers(name, target) if c not in found]
+    return found
+
+
+def allowed_findings(entry: Entry, names: list[str]) -> list[str] | None:
+    """The findings an entry accepts for an image (by its lineage): one list for all, or a list per image."""
     if not isinstance(entry.findings, dict):
         return None
     allowed = entry.findings.get("allowed")
     if isinstance(allowed, dict):
-        allowed = allowed.get(image)
+        allowed = next((allowed[name] for name in names if name in allowed), None)
     return [str(a) for a in allowed] if isinstance(allowed, list) else []
 
 
@@ -405,6 +445,13 @@ def registry_problems(entries: list[Entry], on: date) -> list[str]:
                     if other != entry.id and (not target or not other_target or target == other_target):
                         problems.append(f"{entry.id}: {key} control {control} is already covered by {other}")
                 coverage.setdefault((name, control), []).append((entry.id, target))
+    # A role image inherits its base's exceptions, so its own must not repeat them.
+    for (name, control), covering in coverage.items():
+        base = Image.load(name).base
+        for entry_id, target in covering if base else []:
+            for other, other_target in coverage.get((base.name, control), []):
+                if not target or not other_target or target == other_target:
+                    problems.append(f"{entry_id}: {name} control {control} is already covered by {other} for its base, {base.name}")
     return problems
 
 
@@ -418,6 +465,207 @@ def due_soon(entries: list[Entry], on: date) -> list[str]:
         for e in entries
         if e.active and e.review_by and 0 <= (e.review_by - on).days <= REVIEW_WARNING_DAYS
     ]
+
+
+# The tool catalogue
+
+# A pinned archive's SHA-256, with the version it was pinned for.
+SHA256_PIN = re.compile(r"^\s*sha256:\s*\"?([0-9a-f]{64})\"?\s*#\s*(\S+)\s*$", re.MULTILINE)
+
+
+def load_catalogue() -> dict[str, dict]:
+    tools = load_yaml(CATALOGUE).get("tools") or {}
+    return {str(name): (spec if isinstance(spec, dict) else {}) for name, spec in tools.items()}
+
+
+def tool_blocks(text: str) -> dict[str, str]:
+    """Each tool's lines in tools/tools.yml, by name, to check and rewrite its pins in place."""
+    blocks: dict[str, str] = {}
+    name = None
+    for line in text.splitlines(keepends=True):
+        match = re.match(r"^  ([\w.-]+):\s*$", line)
+        if match:
+            name = match.group(1)
+            blocks[name] = ""
+        elif re.match(r"^\S", line):
+            name = None
+        if name:
+            blocks[name] += line
+    return blocks
+
+
+def image_tools(image: Image, catalogue: dict[str, dict]) -> list[str]:
+    """The tools an image installs, in install order: each one after the tools it requires."""
+    order: list[str] = []
+    visiting: list[str] = []
+
+    def visit(name: str) -> None:
+        if name in order:
+            return
+        if name not in catalogue:
+            raise Failure(f"{image.name}: tool {name!r} is not in tools/tools.yml")
+        if name in visiting:
+            raise Failure(f"tools/tools.yml: {name} requires itself, through {', '.join(visiting)}")
+        visiting.append(name)
+        for required in catalogue[name].get("requires") or []:
+            visit(str(required))
+        visiting.pop()
+        order.append(name)
+
+    for name in image.spec.get("tools") or []:
+        visit(str(name))
+    return order
+
+
+def fill(template: object, tool: dict) -> str:
+    return str(template).replace("{version}", str(tool.get("version", "")))
+
+
+def python_interpreter(name: str, catalogue: dict[str, dict]) -> str:
+    """The interpreter a python tool runs on: the one the package tool it requires names."""
+    for required in catalogue[name].get("requires") or []:
+        interpreter = (catalogue.get(str(required)) or {}).get("interpreter")
+        if interpreter:
+            return str(interpreter)
+    return ""
+
+
+def render_tool(name: str, catalogue: dict[str, dict]) -> dict:
+    """One tool as the Ansible tools step and the test take it."""
+    tool = catalogue[name]
+    out: dict = {"name": name, "method": tool["method"]}
+    for key in ("packages", "files", "commands", "modules", "environment", "configure", "package", "tenv", "expect"):
+        if key in tool:
+            out[key] = tool[key]
+    if "check" in tool:
+        out["check"] = [str(c) for c in tool["check"]] if isinstance(tool["check"], list) else [str(tool["check"])]
+    if "version" in tool:
+        out["version"] = str(tool["version"])
+    if tool["method"] == "archive":
+        out["url"] = fill(tool["url"], tool)
+        out["sha256"] = str(tool["sha256"])
+    if tool["method"] == "python":
+        out["lock"] = str(LOCKS / f"{name}.txt")
+        out["interpreter"] = python_interpreter(name, catalogue)
+    if "repo_files" in tool:
+        out["repo_files"] = {str(dest): str(ROOT / str(src)) for dest, src in tool["repo_files"].items()}
+    return out
+
+
+def catalogue_problems(catalogue: dict[str, dict]) -> list[str]:
+    """Everything wrong with tools/tools.yml."""
+    problems = []
+    blocks = tool_blocks(CATALOGUE.read_text(encoding="utf-8"))
+    for name, tool in catalogue.items():
+        where = f"tools/tools.yml {name}"
+        method = tool.get("method")
+        if method not in METHODS:
+            problems.append(f"{where}: method must be one of {', '.join(METHODS)}")
+            continue
+        if not tool.get("description"):
+            problems.append(f"{where}: no description")
+        requires = [str(r) for r in tool.get("requires") or []]
+        for required in requires:
+            if required not in catalogue:
+                problems.append(f"{where}: requires {required}, which is not in the catalogue")
+        version = str(tool.get("version") or "")
+        if method == "package":
+            packages = tool.get("packages")
+            if not isinstance(packages, dict) or not all(isinstance(packages.get(f), list) and packages.get(f) for f in FAMILIES):
+                problems.append(f"{where}: packages must list the packages for each of {', '.join(FAMILIES)}")
+        elif not version:
+            problems.append(f"{where}: a {method} tool needs a pinned version")
+        elif not re.search(r"#\s*renovate:[^\n]*\n\s*version:", blocks.get(name, "")):
+            problems.append(f"{where}: put a `# renovate:` comment on the line above version, so Renovate bumps it")
+
+        if method == "archive":
+            if "{version}" not in str(tool.get("url", "")):
+                problems.append(f"{where}: url must contain {{version}}")
+            pin = SHA256_PIN.search(blocks.get(name, ""))
+            if not pin:
+                problems.append(f"{where}: no sha256 pinned: run `just pin-tools {name}`")
+            elif pin.group(2) != version:
+                problems.append(f"{where}: sha256 was pinned for {pin.group(2)}, not {version}: run `just pin-tools {name}`")
+            files = tool.get("files")
+            if not isinstance(files, dict) or not files:
+                problems.append(f"{where}: files must map each command to its path in the archive")
+        if method == "python":
+            if not tool.get("package"):
+                problems.append(f"{where}: no package, the name on PyPI")
+            if not tool.get("commands") and not tool.get("modules"):
+                problems.append(f"{where}: list its commands, or the modules to run as commands")
+            if "uv" not in requires:
+                problems.append(f"{where}: a python tool installs with uv, so it must require uv")
+            if not re.search(r"python(\d+\.\d+)$", python_interpreter(name, catalogue)):
+                problems.append(f"{where}: must require a package tool that names its interpreter, such as python")
+            lock = LOCKS / f"{name}.txt"
+            if not lock.is_file():
+                problems.append(f"{where}: no {lock.relative_to(ROOT)}: run `just pin-tools {name}`")
+            elif tool.get("package") and not re.search(
+                rf"^{re.escape(str(tool['package']))}=={re.escape(version)}\b", lock.read_text(encoding="utf-8"), re.MULTILINE | re.IGNORECASE
+            ):
+                problems.append(f"{where}: {lock.relative_to(ROOT)} is not for {tool['package']} {version}: run `just pin-tools {name}`")
+        if method == "tenv":
+            if not any("tenv" in ((catalogue.get(r) or {}).get("files") or {}) for r in requires):
+                problems.append(f"{where}: must require the tool that installs tenv")
+            if not tool.get("tenv"):
+                problems.append(f"{where}: no tenv, the tenv subcommand for the tool, such as tf")
+
+        environment = tool.get("environment")
+        if environment is not None and (not isinstance(environment, dict) or not all(isinstance(v, str) for v in environment.values())):
+            problems.append(f"{where}: environment must map each variable to a quoted string")
+        configure = tool.get("configure")
+        if configure is not None and (not isinstance(configure, dict) or not all(str(p).startswith("/") and isinstance(c, str) for p, c in configure.items())):
+            problems.append(f"{where}: configure must map each absolute path to the file's content")
+        for dest, src in (tool.get("repo_files") or {}).items():
+            if not str(dest).startswith("/") or not (ROOT / str(src)).is_file():
+                problems.append(f"{where}: repo_files must map an absolute path in the image to a file in this repository")
+        if "check" in tool and not isinstance(tool["check"], (str, list)):
+            problems.append(f"{where}: check must be a command, or a list of them")
+    return problems
+
+
+def pin_archive(name: str, tool: dict) -> str:
+    """Download a tool's archive and return its SHA-256, after checking it against the vendor's checksums."""
+    url = fill(tool["url"], tool)
+    asset = url.rsplit("/", 1)[-1]
+    with tempfile.TemporaryDirectory() as tmp:
+        work = Path(tmp)
+        download(url, work / asset)
+        digest = hashlib.sha256((work / asset).read_bytes()).hexdigest()
+        if tool.get("checksums"):
+            download(fill(tool["checksums"], tool), work / "checksums")
+            listed = [
+                line.split()[0]
+                for line in (work / "checksums").read_text(encoding="utf-8").splitlines()
+                if len(line.split()) >= 2 and line.split()[-1].lstrip("*") == asset
+            ]
+            if not listed:
+                raise Failure(f"{name}: {asset} is not in the vendor's checksums at {fill(tool['checksums'], tool)}")
+            if listed[0].lower() != digest:
+                raise Failure(f"{name}: {asset} has SHA-256 {digest}, but the vendor's checksums say {listed[0]}")
+    return digest
+
+
+def pin_python(name: str, tool: dict, catalogue: dict[str, dict]) -> None:
+    """Write a python tool's hash-locked requirements, for its interpreter's Python on Linux x86-64."""
+    uv = shutil.which("uv")
+    if not uv:
+        raise Failure("uv is not on PATH")
+    python = re.search(r"python(\d+\.\d+)$", python_interpreter(name, catalogue))
+    if not python:
+        raise Failure(f"{name}: no interpreter to lock for")
+    LOCKS.mkdir(parents=True, exist_ok=True)
+    lock = LOCKS / f"{name}.txt"
+    # Wheels only, because /tmp is noexec on every image, and built for
+    # glibc 2.34, RHEL 9's, the oldest of the base images'.
+    subprocess.run(
+        [uv, "pip", "compile", "-", "--no-config", "--quiet", "--generate-hashes", "--only-binary", ":all:",
+         "--python-version", python.group(1), "--python-platform", "x86_64-manylinux_2_34",
+         "--custom-compile-command", f"just pin-tools {name}", "--output-file", str(lock)],
+        input=f"{tool['package']}=={tool['version']}\n", text=True, check=True, capture_output=True,
+    )
+    print(f"{name}: locked {tool['package']} {tool['version']} for Python {python.group(1)} in {lock.relative_to(ROOT)}", file=sys.stderr)
 
 
 # Commands
@@ -545,6 +793,9 @@ def cmd_pin_audit(args: argparse.Namespace) -> None:
     """Pin each image's audit content to the commit that matches its role release."""
     for name in args.images or image_names():
         image = Image.load(name)
+        if image.base:
+            print(f"{name}: a role image, so it uses {image.base.name}'s audit content", file=sys.stderr)
+            continue
         fetch_role(image)
         commit, date = matching_audit_commit(image)
         if commit == image.audit["commit"]:
@@ -558,6 +809,32 @@ def cmd_pin_audit(args: argparse.Namespace) -> None:
             raise Failure(f"{path.relative_to(ROOT)}: could not find the audit commit line to update")
         path.write_text(text, encoding="utf-8")
         print(f"{name}: pinned {image.audit_name} to {commit[:12]} ({date}), to match {image.role_name} {image.role['version']}", file=sys.stderr)
+
+
+def cmd_pin_tools(args: argparse.Namespace) -> None:
+    """Pin each archive tool's SHA-256 and each python tool's hash-locked requirements."""
+    catalogue = load_catalogue()
+    for name in args.tools:
+        if name not in catalogue:
+            raise Failure(f"no tool called {name!r} in tools/tools.yml")
+    text = CATALOGUE.read_text(encoding="utf-8")
+    for name in args.tools or list(catalogue):
+        tool = catalogue[name]
+        if tool.get("method") == "archive":
+            digest = pin_archive(name, tool)
+            block = tool_blocks(text)[name]
+            line = f'    sha256: "{digest}"  # {tool["version"]}'
+            updated, count = re.subn(r"^    sha256:.*$", lambda _: line, block, count=1, flags=re.MULTILINE)
+            if count != 1:
+                raise Failure(f"tools/tools.yml {name}: no sha256 line to update")
+            if updated != block:
+                text = text.replace(block, updated, 1)
+                print(f"{name}: pinned {tool['version']} to SHA-256 {digest[:16]}... (matches the vendor's checksums)", file=sys.stderr)
+            else:
+                print(f"{name}: {tool['version']} already pinned", file=sys.stderr)
+        elif tool.get("method") == "python":
+            pin_python(name, tool, catalogue)
+    CATALOGUE.write_text(text, encoding="utf-8")
 
 
 def fetch_role(image: Image) -> None:
@@ -601,6 +878,23 @@ def fetch_audit(image: Image) -> None:
     print(f"Fetched {image.audit_name} at {audit['commit'][:12]}", file=sys.stderr)
 
 
+def base_disk(image: Image, target: str, placeholder: bool = False) -> tuple[Path, str]:
+    """A role image's starting disk, its base's finished qcow2, and that disk's checksum from the base build."""
+    base = image.base
+    out = OUTPUT / base.name / target
+    disk = out / f"{base.name}.qcow2"
+    sums = out / "image.sha256"
+    if disk.is_file() and sums.is_file():
+        for line in sums.read_text(encoding="utf-8").splitlines():
+            parts = line.split()
+            if len(parts) == 2 and parts[1] == disk.name and re.fullmatch(r"[0-9a-f]{64}", parts[0]):
+                return disk, f"sha256:{parts[0]}"
+    if placeholder:
+        # For `packer validate`, which needs a value but never reads the disk.
+        return disk, "sha256:" + "0" * 64
+    raise Failure(f"{image.name} builds on {base.name}, which is not built for {target}: run `just build {base.name} {target}` first")
+
+
 def cmd_render(args: argparse.Namespace) -> None:
     """Write the hardening vars, the Packer variables and the image record."""
     image = Image.load(args.image)
@@ -624,17 +918,37 @@ def cmd_render(args: argparse.Namespace) -> None:
         encoding="utf-8",
     )
 
+    catalogue = load_catalogue()
+    tools = [render_tool(name, catalogue) for name in image_tools(image, catalogue)]
+    environment: dict[str, str] = {}
+    for tool in tools:
+        environment |= tool.get("environment") or {}
+    tools_file = work / "tools.yml"
+    tools_file.write_text(
+        "---\n# Rendered by scripts/images.py from tools/tools.yml for {0}. Do not edit.\n{1}".format(
+            image.name, yaml.safe_dump({"image_tools": tools, "image_environment": environment}, sort_keys=False)
+        ),
+        encoding="utf-8",
+    )
+
     if args.ssh_key:
         key = Path(args.ssh_key).resolve()
         packer_vars = {
-            "iso_urls": image.spec["iso"]["urls"],
-            "iso_checksum": f"sha256:{image.spec['iso']['sha256']}",
             "output_directory": str(Path(args.output).resolve()),
             "ssh_private_key_file": str(key),
             "ssh_public_key": key.with_suffix(".pub").read_text().strip(),
-            "hardening_vars_file": str(hardening_file.resolve()),
-            "hardening_tags": profile.tag,
+            "tools_vars_file": str(tools_file.resolve()),
         }
+        if image.base:
+            disk, checksum = base_disk(image, args.target, placeholder=args.placeholder_base)
+            packer_vars |= {"base_image": str(disk), "base_image_checksum": checksum}
+        else:
+            packer_vars |= {
+                "iso_urls": image.spec["iso"]["urls"],
+                "iso_checksum": f"sha256:{image.spec['iso']['sha256']}",
+                "hardening_vars_file": str(hardening_file.resolve()),
+                "hardening_tags": profile.tag,
+            }
         (work / "build.pkrvars.json").write_text(json.dumps(packer_vars, indent=2) + "\n", encoding="utf-8")
 
     exceptions = [
@@ -643,19 +957,26 @@ def cmd_render(args: argparse.Namespace) -> None:
             "title": e.title,
             "kind": e.kind,
             "risk": e.risk,
-            "controls": e.covers(image.name, args.target),
+            "controls": image_covers(e, image, args.target),
             "decided_on": str(e.decided_on),
             "review_by": str(e.review_by),
         }
         for e in load_registry()
-        if e.active and e.covers(image.name, args.target)
+        if e.active and image_covers(e, image, args.target)
     ]
-    record = {
+    record: dict = {
         "image": image.name,
         "target": args.target,
         "built": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "source_commit": git_head(),
-        "iso": image.spec["iso"],
+    }
+    if image.base:
+        base_record = OUTPUT / image.base.name / args.target / "image.json"
+        record["base"] = json.loads(base_record.read_text(encoding="utf-8")) if base_record.is_file() else {"image": image.base.name}
+    else:
+        record["iso"] = image.spec["iso"]
+    record["tools"] = [{"name": t["name"], "method": t["method"], "version": t.get("version", "base image repositories")} for t in tools]
+    record |= {
         "hardening": {
             "role": {"name": image.role_name, **image.role},
             "audit": {"name": image.audit_name, **image.audit},
@@ -682,6 +1003,7 @@ def cmd_validate(args: argparse.Namespace) -> None:
     on = today()
     entries = load_registry()
     problems = [f"exceptions.yml: {p}" for p in registry_problems(entries, on)]
+    problems += catalogue_problems(load_catalogue())
     for name in args.images or image_names():
         image = Image.load(name)
         problems.extend(f"{name}: {p}" for p in validate_image(image, entries))
@@ -692,11 +1014,50 @@ def cmd_validate(args: argparse.Namespace) -> None:
     print("Every image definition, hardening profile and exception is valid.", file=sys.stderr)
 
 
+def validate_tools(image: Image) -> list[str]:
+    tools = image.spec.get("tools")
+    if tools is None:
+        return []
+    if not isinstance(tools, list) or not all(isinstance(t, str) for t in tools):
+        return ["image.yml tools must list tool names from tools/tools.yml"]
+    try:
+        image_tools(image, load_catalogue())
+    except Failure as error:
+        return [str(error)]
+    return []
+
+
+def validate_role_image(image: Image) -> list[str]:
+    """A role image: a base that is a golden image, tools, and no hardening of its own."""
+    problems = []
+    spec = image.spec
+    name = str(spec.get("base"))
+    if name not in image_names():
+        return [f"image.yml base {name!r} is not an image"]
+    base = Image.load(name)
+    if base.base:
+        problems.append(f"image.yml base {name} is a role image; build on a golden image")
+    for key in ("iso", "hardening"):
+        if key in spec:
+            problems.append(f"image.yml {key}: a role image takes it from its base, {name}")
+    if (image.path / "hardening").exists():
+        problems.append(f"hardening/: a role image applies its base's hardening, so it has none of its own")
+    for target in image.targets():
+        if target not in base.targets():
+            problems.append(f"source {target!r}: {name} has no {target!r} target to build on")
+    if not spec.get("tools"):
+        problems.append("image.yml tools: a role image exists to add tools, so list them")
+    return problems + validate_tools(image)
+
+
 def validate_image(image: Image, entries: list[Entry]) -> list[str]:
     problems = []
     spec = image.spec
     if spec.get("name") != image.name:
         problems.append(f"image.yml name is {spec.get('name')!r}, not the folder name")
+    if "base" in spec:
+        return problems + validate_role_image(image)
+    problems += validate_tools(image)
     iso = spec.get("iso") or {}
     if not iso.get("urls") or not re.fullmatch(r"[0-9a-f]{64}", str(iso.get("sha256", ""))):
         problems.append("image.yml needs iso.urls and a 64 character iso.sha256")
@@ -773,7 +1134,7 @@ def validate_image(image: Image, entries: list[Entry]) -> list[str]:
             else:
                 check_exception(where, entry_id, target)
                 entry = find_entry(entries, entry_id)
-                allowed = allowed_findings(entry, image.name) if entry else None
+                allowed = allowed_findings(entry, [image.name]) if entry else None
                 if isinstance(keep, list) and sorted(allowed or []) != sorted(map(str, keep)):
                     problems.append(f"{where}: keep {sorted(map(str, keep))} must match {entry_id} findings.allowed {sorted(map(str, allowed or []))}")
     return problems
@@ -783,14 +1144,14 @@ def validate_image(image: Image, entries: list[Entry]) -> list[str]:
 
 
 def render_image_readme(image: Image) -> str:
+    if image.base:
+        return render_role_readme(image)
     spec, role, audit = image.spec, image.role, image.audit
     iso_name = spec["iso"]["urls"][0].rsplit("/", 1)[-1]
     targets = image.targets()
     profile = load_profile(image, targets[0]).tag
-    entries = [e for e in load_registry() if e.active and e.covers(image.name)]
-
-    def cell(text: object) -> str:
-        return squash(text).replace("|", "\\|")
+    registry = load_registry()
+    entries = [e for e in registry if e.active and image_covers(e, image)]
 
     lines = [
         "<!-- Written by `just docs` from image.yml, hardening/ and ../../exceptions.yml. Edit those, not this file. -->",
@@ -840,7 +1201,8 @@ def render_image_readme(image: Image) -> str:
 
     for (var, _, _, _), row in sorted(rows.items(), key=lambda item: natural_key(item[0][0])):
         setting = row["setting"]
-        why = f"Exception {setting.exception}." if setting.exception else cell(setting.reason)
+        switched = find_entry(registry, setting.exception) if setting.exception else None
+        why = f"Switched off: {switched.id}, {cell(switched.title)}." if switched else f"Exception {setting.exception}." if setting.exception else cell(setting.reason)
         lines.append(f"| `{var}` | `{json.dumps(setting.value)}` | {applies(row['targets'])} | {why} |")
     for (keep, entry_id), found in modules.items():
         kept = [f"`{m}`" for m in keep]
@@ -857,25 +1219,9 @@ def render_image_readme(image: Image) -> str:
             f"The harden step also sets the default firewall zone to allow only {', '.join(f'`{s}`' for s in allowed) or 'nothing'} "
             f"(targets: {applies(found)}).",
         ]
-    lines += [
-        "",
-        "## Exceptions",
-        "",
-        "The CIS controls this image does not meet, from the registry in [`exceptions.yml`](../../exceptions.yml). "
-        "The test fails the build on any other audit failure, on an exception whose control now passes, and on one past its review date.",
-        "",
-        "| ID | Controls | Kind | Risk | Review by | Decision |",
-        "|---|---|---|---|---|---|",
-    ]
-    for entry in entries:
-        controls = ", ".join(entry.controls.get(image.name, []))
-        for key, scoped in entry.controls.items():
-            if key.startswith(f"{image.name}/"):
-                controls += f"{', ' if controls else ''}{', '.join(scoped)} (`{key.split('/', 1)[1]}` only)"
-        decision = f"**{cell(entry.title)}.** {cell(entry.reason)}"
-        if entry.mitigation:
-            decision += f" Mitigation: {cell(entry.mitigation)}"
-        lines.append(f"| {entry.id} | {controls} | {entry.kind} | {entry.risk} | {entry.review_by} | {decision} |")
+    if image.spec.get("tools"):
+        lines += ["", *tools_section(image, "Installed before the harden step, so the lockdown role hardens them with the rest of the system.")]
+    lines += ["", *exceptions_section(image, entries)]
     lines += [
         "",
         "## Targets",
@@ -886,6 +1232,98 @@ def render_image_readme(image: Image) -> str:
     for target in targets:
         lines.append(f"| `{target}` | [`{target}.pkr.hcl`](./{target}.pkr.hcl) | [`hardening/{target}.yml`](./hardening/{target}.yml) |")
     lines += ["", f"Build and test it with `just all {image.name} <target>`.", ""]
+    return "\n".join(lines)
+
+
+def cell(text: object) -> str:
+    return squash(text).replace("|", "\\|")
+
+
+def tools_section(image: Image, when: str) -> list[str]:
+    catalogue = load_catalogue()
+    how = {
+        "package": "the base image's signed packages, patched at every build",
+        "archive": "release archive, SHA-256 pinned",
+        "python": "own Python environment, hash-locked requirements",
+        "tenv": "through tenv, HashiCorp's signature checked",
+    }
+    lines = [
+        "## Tools",
+        "",
+        f"From the catalogue in [`tools/tools.yml`](../../tools/tools.yml). {when} The test runs each one as an unprivileged user.",
+        "",
+        "| Tool | Version | Installed from | What |",
+        "|---|---|---|---|",
+    ]
+    for name in image_tools(image, catalogue):
+        tool = catalogue[name]
+        version = f"`{tool['version']}`" if "version" in tool else "the distribution's"
+        lines.append(f"| `{name}` | {version} | {how[tool['method']]} | {cell(tool.get('description'))} |")
+    return lines
+
+
+def exceptions_section(image: Image, entries: list[Entry]) -> list[str]:
+    inherited = f" They include every exception for its base, `{image.base.name}`." if image.base else ""
+    lines = [
+        "## Exceptions",
+        "",
+        "The CIS controls this image does not meet, from the registry in [`exceptions.yml`](../../exceptions.yml)."
+        f"{inherited} "
+        "The test fails the build on any other audit failure, on an exception whose control now passes, and on one past its review date.",
+        "",
+        "| ID | Controls | Kind | Risk | Review by | Decision |",
+        "|---|---|---|---|---|---|",
+    ]
+    for entry in entries:
+        parts = []
+        for name in image.lineage:
+            controls = ", ".join(entry.controls.get(name, []))
+            for key, scoped in entry.controls.items():
+                if key.startswith(f"{name}/"):
+                    controls += f"{', ' if controls else ''}{', '.join(scoped)} (`{key.split('/', 1)[1]}` only)"
+            if controls:
+                parts.append(controls)
+        decision = f"**{cell(entry.title)}.** {cell(entry.reason)}"
+        if entry.mitigation:
+            decision += f" Mitigation: {cell(entry.mitigation)}"
+        lines.append(f"| {entry.id} | {'; '.join(parts)} | {entry.kind} | {entry.risk} | {entry.review_by} | {decision} |")
+    return lines
+
+
+def render_role_readme(image: Image) -> str:
+    spec, base = image.spec, image.base
+    entries = [e for e in load_registry() if e.active and image_covers(e, image)]
+    lines = [
+        "<!-- Written by `just docs` from image.yml, ../../tools/tools.yml and ../../exceptions.yml. Edit those, not this file. -->",
+        "",
+        f"# {image.name}",
+        "",
+        f"{spec['description']}.",
+        "",
+    ]
+    for note in spec.get("notes") or []:
+        lines += [squash(note), ""]
+    lines += [
+        "## Built from",
+        "",
+        f"The finished [`{base.name}`](../{base.name}) image, so it keeps that image's hardening: "
+        f"{image.role_name} `{image.role['version']}`, CIS profile `{load_profile(image, image.targets()[0]).tag}`, "
+        f"audited with {image.audit_name} at commit `{image.audit['commit'][:12]}`. "
+        "The build boots it as a new VM, patches it, adds the tools below and generalises it again. It does not harden it a second time: "
+        "the test audits the result with the same gate, so a tool that weakens the hardening fails the build.",
+        "",
+        *tools_section(image, "Installed after the base image's hardening, as root, readable by every user."),
+        "",
+        *exceptions_section(image, entries),
+        "",
+        "## Targets",
+        "",
+        "| Target | Packer source |",
+        "|---|---|",
+    ]
+    for target in image.targets():
+        lines.append(f"| `{target}` | [`{target}.pkr.hcl`](./{target}.pkr.hcl) |")
+    lines += ["", f"Build its base first, then build and test it: `just build {base.name}`, then `just all {image.name}`.", ""]
     return "\n".join(lines)
 
 
@@ -944,8 +1382,8 @@ def cmd_gate(args: argparse.Namespace) -> None:
             if not result.get("successful"):
                 failing.setdefault(control, []).append(result)
 
-    entries = [e for e in load_registry() if e.active and e.covers(image.name, args.target)]
-    coverage = {control: entry for entry in entries for control in entry.covers(image.name, args.target)}
+    entries = [e for e in load_registry() if e.active and image_covers(e, image, args.target)]
+    coverage = {control: entry for entry in entries for control in image_covers(entry, image, args.target)}
     # Controls switched off in the role are not audited, so they cannot fail.
     disabled = load_profile(image, args.target).disabled_controls()
 
@@ -955,7 +1393,7 @@ def cmd_gate(args: argparse.Namespace) -> None:
     for control in unexpected:
         problems.append(f"{control} failed and no exception covers it: fix the image, or record an exception in exceptions.yml")
     for entry in entries:
-        for control in entry.covers(image.name, args.target):
+        for control in image_covers(entry, image, args.target):
             if control in disabled:
                 notes.append(f"{entry.id} covers {control}, which the image switches off in the role, so the audit skips it.")
             elif control not in checked:
@@ -966,12 +1404,12 @@ def cmd_gate(args: argparse.Namespace) -> None:
             # is a prompt to check the classification, not a failure.
             if entry.kind == "manual" and any("manual" not in (r.get("title") or "").lower() for r in failing.get(control, [])):
                 notes.append(f"{entry.id} is a manual exception, but the audit's title for {control} does not say Manual: check it is one.")
-        if isinstance(entry.findings, dict) and any(c in checked for c in entry.covers(image.name, args.target)):
+        if isinstance(entry.findings, dict) and any(c in checked for c in image_covers(entry, image, args.target)):
             # goss prints command output as a quoted string, with \" and \n escaped.
-            text = "\n".join(r.get("summary-line") or "" for c in entry.covers(image.name, args.target) for r in failing.get(c, []))
+            text = "\n".join(r.get("summary-line") or "" for c in image_covers(entry, image, args.target) for r in failing.get(c, []))
             text = text.replace('\\"', '"').replace("\\n", "\n")
             found = set(re.findall(str(entry.findings.get("pattern")), text))
-            allowed = set(allowed_findings(entry, image.name) or [])
+            allowed = set(allowed_findings(entry, image.lineage) or [])
             if found - allowed:
                 problems.append(f"{entry.id} accepts {', '.join(sorted(allowed))}, but the audit also found {', '.join(sorted(found - allowed))}")
             if allowed - found:
@@ -1062,12 +1500,17 @@ def main() -> int:
     sub.add_argument("images", nargs="*")
     sub.set_defaults(func=cmd_pin_audit)
 
-    sub = commands.add_parser("render", help="write the hardening vars, Packer variables and image record")
+    sub = commands.add_parser("pin-tools", help="pin each archive tool's SHA-256 and lock each python tool's requirements")
+    sub.add_argument("tools", nargs="*")
+    sub.set_defaults(func=cmd_pin_tools)
+
+    sub = commands.add_parser("render", help="write the hardening vars, tool list, Packer variables and image record")
     sub.add_argument("image")
     sub.add_argument("target")
     sub.add_argument("--workdir", required=True, help="where to write the rendered files")
     sub.add_argument("--output", default="", help="the Packer output directory")
-    sub.add_argument("--ssh-key", help="the build's private key; omit to render the hardening vars only")
+    sub.add_argument("--ssh-key", help="the build's private key; omit to render the hardening vars and tool list only")
+    sub.add_argument("--placeholder-base", action="store_true", help="for packer validate: allow a role image's base to be unbuilt")
     sub.set_defaults(func=cmd_render)
 
     sub = commands.add_parser("validate", help="check image definitions, hardening profiles and the exception registry")

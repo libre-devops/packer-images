@@ -9,8 +9,10 @@ set -eu
 
 rm -f -- "$0"
 
-# The build account. Packer's session is still open, so --force.
+# The build account. Packer's session is still open, so --force. A role
+# image's build account comes from cloud-init, which also wrote it a sudo rule.
 userdel --force --remove '{{ ansible_user }}'
+rm -f /etc/sudoers.d/90-cloud-init-users
 
 # Make the next boot a first boot: cloud-init state, seed and logs, and a new
 # machine ID, SSH host keys and random seed on every VM.

@@ -14,6 +14,14 @@
 profile: level1-server
 
 settings:
+  # Running containers is a main use case, and CIS 1.3.1.3 stops it: the role
+  # moves every AppArmor profile into complain mode, in which podman and crun
+  # cannot run a container. So the image does not apply it, and AppArmor stays
+  # as Ubuntu ships it.
+  - var: ubtu24cis_rule_1_3_1_3
+    value: false
+    exception: EX-018
+
   - var: ubtu24cis_level_2
     value: false
     reason: >-
@@ -26,5 +34,5 @@ settings:
 # time and those kept here. Keeping a module is an exception, so `keep` must
 # match the exception's findings.
 filesystem_modules:
-  keep: [fat, isofs]
+  keep: [fat, isofs, overlay]
   exception: EX-002

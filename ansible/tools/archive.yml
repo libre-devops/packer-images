@@ -1,0 +1,37 @@
+---
+# Method `archive`: a release archive, refused unless it matches the SHA-256
+# pinned in the catalogue. Only the binaries named in `files` are kept.
+- name: "Download {{ tool.name }} {{ tool.version }}"
+  ansible.builtin.get_url:
+    url: "{{ tool.url }}"
+    dest: "{{ tools_downloads }}/{{ tool.name }}.archive"
+    checksum: "sha256:{{ tool.sha256 }}"
+    owner: root
+    group: root
+    mode: "0600"
+
+- name: "Create a directory to unpack {{ tool.name }}"
+  ansible.builtin.file:
+    path: "{{ tools_downloads }}/{{ tool.name }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+
+- name: "Unpack {{ tool.name }}"
+  ansible.builtin.unarchive:
+    src: "{{ tools_downloads }}/{{ tool.name }}.archive"
+    dest: "{{ tools_downloads }}/{{ tool.name }}"
+    remote_src: true
+
+- name: "Install the commands from {{ tool.name }}"
+  ansible.builtin.copy:
+    src: "{{ tools_downloads }}/{{ tool.name }}/{{ item.value }}"
+    dest: "{{ tools_bin }}/{{ item.key }}"
+    remote_src: true
+    owner: root
+    group: root
+    mode: "0755"
+  loop: "{{ tool.files | dict2items }}"
+  loop_control:
+    label: "{{ tools_bin }}/{{ item.key }}"

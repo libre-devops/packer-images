@@ -1,0 +1,25 @@
+---
+# Method `tenv`: a version installed through tenv, which checks the checksums
+# and HashiCorp's signature on them, with the key the tenv tool installs from
+# keys/hashicorp.asc, and made the default for projects that do not ask for
+# another one.
+- name: "Install through tenv {{ tool.name }} {{ tool.version }}"
+  ansible.builtin.command:
+    argv: ["{{ tools_bin }}/tenv", "{{ tool.tenv }}", install, "{{ tool.version }}"]
+  environment: "{{ tools_environment }}"
+  register: tools_tenv_install
+  changed_when: "'already installed' not in (tools_tenv_install.stdout + tools_tenv_install.stderr)"
+
+- name: "Make the default {{ tool.name }} {{ tool.version }}"
+  ansible.builtin.command:
+    argv: ["{{ tools_bin }}/tenv", "{{ tool.tenv }}", use, "{{ tool.version }}"]
+  environment: "{{ tools_environment }}"
+  changed_when: true
+
+- name: "Make tenv's versions readable by every user"
+  ansible.builtin.file:
+    path: "{{ tools_environment.TENV_ROOT }}"
+    owner: root
+    group: root
+    mode: u=rwX,go=rX
+    recurse: true

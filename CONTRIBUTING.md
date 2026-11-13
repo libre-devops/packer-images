@@ -42,6 +42,8 @@ To look around a test VM, run `KEEP=1 just test <image>`: it leaves the VM runni
 
 When the gate reports a control no exception covers, first try to fix the image. If the image should not meet the control, or the control is one the audit cannot check:
 
+If a control stops something the images exist to do, such as running containers, do not apply it and then work around it: switch it off in the hardening profile with an exception, kind `deviation`, whose reason says what it breaks and how you proved it on a test VM (`KEEP=1 just test <image>`). Add it to the table under "Hardening skipped so the images work" in the README.
+
 1. Look in [`exceptions.yml`](./exceptions.yml) for an entry on the same subject from another image, such as the bootloader password. If the same decision applies, add your image and its control number to that entry's `controls`. Numbers differ between benchmarks, so check the image's own audit output.
 2. Otherwise add an entry with the next free id. Use `kind: manual` for a control the benchmark marks as manual, and give as the `reason` what you checked on a test VM (`KEEP=1 just test <image>`), not what the image probably does. Use `kind: false-positive` only when you have read the audit check and can say why it is wrong, with what the image actually does; consider reporting it to the lockdown team. Use `kind: deviation` for anything else, with a `mitigation`.
 3. If the image switches the control off in the role (a `<prefix>_rule_<number>: false` setting), give that setting `exception: EX-<id>` instead of a reason.
@@ -66,6 +68,27 @@ Renovate cannot bump ISOs, so do it by hand when a point release comes out:
 3. Start `hardening/common.yml` from the role's defaults, with an entry and reason for each change, and run `just pin-audit <name>`. Read the role's defaults for anything that depends on the connecting user: the build account is deleted, so a setting that allows only that user locks everyone out.
 4. Copy `.github/workflows/ubuntu-24.04.yml` to `<name>.yml` and change the image name and paths.
 5. Add the image to the table in `README.md`, run `just docs`, then `just all <name>`, and record an exception for each failure you do not fix.
+
+## Add a tool
+
+1. If the tool is not in `tools/tools.yml`, add it under `tools`, picking the method that fits:
+   - `package` when the base images' own repositories have it, with the package names for `Debian` and `RedHat`. This is the first choice: the OS vendor signs and patches it.
+   - `archive` for a release archive: `url` and, where the vendor publishes them, `checksums`, both with `{version}`, and `files`, each command and its path in the archive. Leave `sha256` empty.
+   - `python` for a PyPI application: `package`, `requires: [python, uv]`, and its `commands`, or `modules` for one whose script would pick up any Python on PATH.
+   - `tenv` for a Terraform or OpenTofu version, with `requires: [tenv]`.
+
+   Give a versioned tool a `# renovate:` comment on the line above `version`, with the datasource and name, so Renovate bumps it. Give it a `check`, a command that prints its version, which the test runs as an unprivileged user. Put any environment variable it needs under `environment`.
+2. Run `just pin-tools <tool>`. It writes the archive's SHA-256 after checking it against the vendor's checksums, or the Python tool's hash-locked requirements in `tools/locks/`.
+3. Add its name to `tools` in each image's `image.yml` that needs it. What it requires comes with it.
+4. Run `just validate`, `just docs` and `just all <image>`, and attach the audit summary to the pull request.
+
+When Renovate bumps a tool, run `just pin-tools` on its branch: the build refuses an archive that does not match its pin, and `just validate` refuses a lock or a SHA-256 pinned for another version.
+
+## Add a role image
+
+1. Create `images/<name>` with an `image.yml` that names its `base`, a golden image, and lists its `tools`, and no `iso` or `hardening`. Copy the Packer files from `images/azdo-agent-ubuntu-24.04` and change the names.
+2. Copy `.github/workflows/azdo-agent-ubuntu-24.04.yml` to `<name>.yml` and change the image, base and paths. The job builds the base first.
+3. Add the image to the table in `README.md`, run `just docs`, then `just build <base>` and `just all <name>`. The base's exceptions apply; record one for the role image only for a failure that comes from its tools.
 
 ## Add a target
 

@@ -1,6 +1,6 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "description": "Renovate bumps the hardening role in each images/<name>/image.yml (run `just pin-audit` on its branch to move the audit content to match), the Packer plugins, Packer itself in versions.yml, the Ansible collections, the Python tools and GitHub Actions digests. Each image's pins get their own pull request, which runs that image's build, test and audit gate before it can merge. Installer ISOs are not Renovate's job: see CONTRIBUTING.md.",
+  "description": "Renovate bumps the hardening role in each images/<name>/image.yml (run `just pin-audit` on its branch to move the audit content to match), the Packer plugins, Packer itself in versions.yml, the tools in tools/tools.yml (run `just pin-tools` on its branch to pin the new hashes and Python locks), the Ansible collections, the Python tools and GitHub Actions digests. Each image's pins get their own pull request, which runs that image's build, test and audit gate before it can merge. Installer ISOs are not Renovate's job: see CONTRIBUTING.md.",
   "extends": [
     "config:best-practices",
     ":semanticCommits"
@@ -28,9 +28,10 @@
   "customManagers": [
     {
       "customType": "regex",
-      "description": "Tool versions in versions.yml that carry a renovate comment on the line above",
+      "description": "Versions in versions.yml and tools/tools.yml that carry a renovate comment on the line above",
       "managerFilePatterns": [
-        "/^versions\\.yml$/"
+        "/^versions\\.yml$/",
+        "/^tools/tools\\.yml$/"
       ],
       "matchStrings": [
         "#\\s*renovate:\\s*datasource=(?<datasource>\\S+)\\s+depName=(?<depName>\\S+)(?:\\s+extractVersion=(?<extractVersion>\\S+))?\\s*\\n\\s*[\\w-]+:\\s*\"?(?<currentValue>[^\\s\"]+)\"?"
@@ -75,6 +76,13 @@
         "images/*/plugins.pkr.hcl"
       ],
       "groupName": "packer"
+    },
+    {
+      "description": "The role images' tools in one weekly pull request. Renovate bumps the version only: run `just pin-tools` on the branch, which pins each archive's SHA-256 against the vendor's checksums and relocks the Python tools, and the build refuses anything that does not match",
+      "matchFileNames": [
+        "tools/tools.yml"
+      ],
+      "groupName": "image tools"
     },
     {
       "description": "Ansible collections together; every image pipeline runs on them",

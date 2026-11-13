@@ -97,6 +97,21 @@
         fail_msg: "Failed units: {{ verify_failed_units.stdout_lines }}"
         quiet: true
 
+    # cloud-init writes a sudo rule for each user it makes, and a role image's
+    # build account is one of them. A rule left behind would give sudo to the
+    # next account with that name.
+    - name: Look for sudo rules that name the build account
+      ansible.builtin.command: grep -rlw -- "{{ verify_build_user }}" /etc/sudoers /etc/sudoers.d
+      register: verify_build_sudo
+      changed_when: false
+      failed_when: verify_build_sudo.rc not in [0, 1]
+
+    - name: Check no sudo rule names the build account
+      ansible.builtin.assert:
+        that: verify_build_sudo.stdout_lines | length == 0
+        fail_msg: "Sudo rules still name {{ verify_build_user }}: {{ verify_build_sudo.stdout_lines }}"
+        quiet: true
+
     - name: Run the audit, as the lockdown role's audit-only mode
       ansible.builtin.include_role:
         name: "{{ hardening_role }}"
@@ -108,3 +123,41 @@
         audit_conf_source: "{{ verify_audit_archive }}"
         fetch_audit_output: true
         audit_output_destination: "{{ verify_audit_output }}"
+
+# A second play, because the lockdown role's audit-only mode ends the first
+# one for the host (meta: end_host), and after the audit, which must see the
+# VM as it first booted: the tools write to the user's home (az makes
+# ~/.azure), which CIS 7.2.10 checks. As a user would, not root: the hardened
+# umask, mount options and user namespace limits are what break tools, and
+# only for other users.
+- name: Check the image's tools
+  hosts: all
+  become: false
+  gather_facts: false
+  tasks:
+    - name: Run each tool's checks as an unprivileged user
+      ansible.builtin.command: "{{ item.1 }}"
+      register: verify_tool_runs
+      changed_when: false
+      failed_when: false
+      loop: "{{ image_tools | selectattr('check', 'defined') | subelements('check') }}"
+      loop_control:
+        label: "{{ item.1 }}"
+
+    - name: Check each tool works and is the pinned version
+      ansible.builtin.assert:
+        that:
+          - runs | map(attribute='rc') | select('ne', 0) | list | length == 0
+          - item.version is not defined or item.version in output
+          - item.expect is not defined or item.expect in output
+        fail_msg: >-
+          {{ item.name }}: {{ runs | map(attribute='cmd') | map('join', ' ') | list }} gave exit codes
+          {{ runs | map(attribute='rc') | list }}, expected {{ item.version | default('no version') }}
+          and {{ item.expect | default('nothing else') }}. Output: {{ output }} {{ runs | map(attribute='stderr') | join(' ') }}
+        quiet: true
+      vars:
+        runs: "{{ verify_tool_runs.results | selectattr('item.0.name', 'equalto', item.name) | list }}"
+        output: "{{ runs | map(attribute='stdout') | join('\n') }}"
+      loop: "{{ image_tools | selectattr('check', 'defined') | list }}"
+      loop_control:
+        label: "{{ item.name }}"
