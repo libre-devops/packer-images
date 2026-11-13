@@ -4,7 +4,7 @@
 
 Red Hat Enterprise Linux 9 family (minimal), hardened to CIS Level 1 Server.
 
-The QEMU target installs AlmaLinux 9, which is built from the same sources as RHEL 9 and which the RHEL9-CIS role supports, because the RHEL ISO needs a Red Hat login and a subscription to patch. The cloud targets, when they come, will start from Red Hat's own pay-as-you-go images.
+The QEMU target installs AlmaLinux 9, which is built from the same sources as RHEL 9 and which the RHEL9-CIS role supports, because the RHEL ISO needs a Red Hat login and a subscription to patch. The cloud targets, when they come, will start from Red Hat's own pay-as-you-go images. The work to install from RHEL itself is in docs/rhel.md.
 
 ## Built from
 

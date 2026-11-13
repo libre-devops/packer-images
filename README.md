@@ -27,7 +27,7 @@ Golden VM images built with Packer and configured with Ansible. Each image is in
 | [`ubuntu-24.04`](./images/ubuntu-24.04) | `qemu` | CIS Ubuntu Linux 24.04 LTS v1.0.0, Level 1 Server, with [UBUNTU24-CIS](https://github.com/ansible-lockdown/UBUNTU24-CIS) | [`ubuntu-24.04.yml`](./.github/workflows/ubuntu-24.04.yml) |
 | [`rhel-9`](./images/rhel-9) | `qemu` (AlmaLinux 9) | CIS Red Hat Enterprise Linux 9 v2.0.0, Level 1 Server, with [RHEL9-CIS](https://github.com/ansible-lockdown/RHEL9-CIS) | [`rhel-9.yml`](./.github/workflows/rhel-9.yml) |
 
-The `rhel-9` image's QEMU target installs AlmaLinux 9, which is built from the same sources as RHEL 9 and which RHEL9-CIS supports, because the RHEL ISO needs a Red Hat login and a subscription to patch. Its cloud targets, when they come, will start from Red Hat's own images.
+The `rhel-9` image's QEMU target installs AlmaLinux 9, which is built from the same sources as RHEL 9 and which RHEL9-CIS supports, because the RHEL ISO needs a Red Hat login and a subscription to patch. The work to build it from RHEL itself is in [`docs/rhel.md`](./docs/rhel.md). Its cloud targets, when they come, will start from Red Hat's own images.
 
 Planned, in this order: Windows Server 2025 and Windows 11 as golden images, each hardened with its ansible-lockdown role (Windows-2025-CIS, Windows-11-CIS). Then role images built on top of them, such as Azure DevOps agents and Azure Virtual Desktop hosts. Then the Azure Compute Gallery and AWS AMI targets.
 
@@ -157,6 +157,7 @@ images/<image>/
   hardening/           common.yml and one file per target
   README.md            written by `just docs`
 exceptions.yml         the CIS exception registry
+docs/                  longer notes and plans, such as building rhel-9 from RHEL
 ansible/               base, harden, generalise and verify playbooks
 scripts/               images.py (pins, rendering, validation, gate), build, test and validate scripts
 keys/                  HashiCorp's release signing key, which `just tools` checks Packer with
