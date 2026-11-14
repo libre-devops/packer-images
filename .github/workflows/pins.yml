@@ -5,12 +5,11 @@ name: Pins
 # a pull request from a branch in this repository, Renovate's included, that
 # changes a tool's version or an image's lockdown role, this pins the new
 # SHA-256s, Python locks and audit content, and regenerates the image
-# READMEs, as `just repin` does locally. It pushes them to the branch as
-# github-actions[bot], then starts the checks on the new commit, because a
-# push made with GITHUB_TOKEN starts no workflow by itself. The commit is
-# unsigned, but never reaches main as it is: the repository only
-# squash-merges, and GitHub signs the squash commit. A pull request from a
-# fork gets no write token, so its author runs `just repin`.
+# READMEs, as `just repin` does locally. It commits them to the branch as one
+# commit GitHub signs, then starts the checks on it, because a commit made
+# with GITHUB_TOKEN starts no workflow by itself, and deletes the runs GitHub
+# holds for approval for that commit, which would only repeat them. A pull
+# request from a fork gets no write token, so its author runs `just repin`.
 
 on:
   pull_request:
@@ -31,7 +30,7 @@ jobs:
     timeout-minutes: 30
     permissions:
       contents: write # to commit the pins to the pull request's branch
-      actions: write # to start CI and the image workflows on that commit
+      actions: write # to start CI and the image workflows on that commit, and delete the runs held for it
     concurrency:
       group: pins-${{ github.head_ref }}
       cancel-in-progress: true
