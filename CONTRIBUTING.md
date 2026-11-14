@@ -85,7 +85,7 @@ Renovate cannot bump ISOs, so do it by hand when a point release comes out:
 3. Add its name to `tools` in each image's `image.yml` that needs it. What it requires comes with it.
 4. Run `just validate`, `just docs` and `just all <image>`, and attach the audit summary to the pull request.
 
-When Renovate bumps a tool, the Pins workflow ([`pins.yml`](./.github/workflows/pins.yml)) runs `just repin` on its branch: it pins the new SHA-256 against the vendor's checksums or relocks the Python tool, pushes that to the branch as `github-actions[bot]`, and starts the checks on it. Nobody edits a hash by hand. On a branch from a fork, run `just repin` yourself. Either way, the build refuses an archive that does not match its pin, and `just validate` refuses a lock or a SHA-256 pinned for another version.
+When Renovate bumps a tool, the Pins workflow ([`pins.yml`](./.github/workflows/pins.yml)) runs `just repin` on its branch: it pins the new SHA-256 against the vendor's checksums or relocks the Python tool, commits that as one commit GitHub signs, and starts the checks on it. Nobody edits a hash by hand. On a branch from a fork, run `just repin` yourself. Either way, the build refuses an archive that does not match its pin, and `just validate` refuses a lock or a SHA-256 pinned for another version.
 
 ## Add a role image
 
