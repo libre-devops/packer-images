@@ -1,0 +1,38 @@
+---
+# GitHub Actions self-hosted runner, on the hardened rhel-9 image.
+#
+# A role image: it starts from its base's finished disk, so it keeps the
+# base's hardening and takes its audit content and exceptions, and adds the
+# tools listed here from tools/tools.yml.
+
+name: gh-runner-rhel-9
+description: GitHub Actions self-hosted runner, on the hardened rhel-9 image
+family: linux
+base: rhel-9
+notes:
+  - >-
+    The GitHub Actions runner is at /opt/actions-runner, owned by root and
+    read-only, with no account and no registration in the image. The runner
+    writes its registration and logs into its own folder, so a deployment
+    makes the runner's user, named runner so it can write to the shared tool
+    cache at /opt/hostedtoolcache, copies the folder into that user's home and
+    starts it there, for example from cloud-init: `cp -r /opt/actions-runner
+    /home/runner/` as that user, then `./run.sh --jitconfig <config>` with a
+    just-in-time configuration from the GitHub API. A runner registered with
+    `config.sh` instead takes `--disableupdate`: the image pins the runner,
+    and Renovate bumps it.
+  - >-
+    Podman, with the docker command, comes from the base image. Its QEMU target builds on AlmaLinux 9, as rhel-9's does.
+
+tools:
+  - actions-runner
+  - hosted-toolcache
+  - git
+  - jq
+  - python
+  - uv
+  - azure-cli
+  - ansible
+  - tenv
+  - terraform
+  - podman-compose

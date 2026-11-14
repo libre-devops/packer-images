@@ -19,17 +19,20 @@
 #             `commands` go to /usr/local/bin
 #   tenv      a Terraform version installed through tenv, which checks
 #             HashiCorp's signature with the key pinned in keys/hashicorp.asc
+#   directory a directory a group shares, such as the tool cache, owned by
+#             root and the group, which members alone can write to
 #
 # `check` runs as an unprivileged user in the test, and its output must
-# contain the pinned version. `environment` goes to /etc/environment, which
+# contain the pinned version and everything under `expect`. `environment` goes to /etc/environment, which
 # Azure DevOps scale set agents read.
 
 tools:
-  # What the Azure Pipelines agent needs at run time. Azure DevOps installs the
-  # agent itself when it adds a VM to the pool, so the image does not.
-  azure-pipelines-agent-deps:
+  # What the Azure Pipelines agent and the GitHub Actions runner need at run
+  # time: both are .NET applications. Azure DevOps installs its agent itself
+  # when it adds a VM to the pool, so the image does not.
+  runner-libraries:
     method: package
-    description: Libraries the Azure Pipelines agent needs (ICU, Kerberos, zlib)
+    description: Libraries the Azure Pipelines agent and the GitHub Actions runner need (ICU, Kerberos, zlib)
     packages:
       Debian: [libicu74, libkrb5-3, zlib1g]
       RedHat: [libicu, krb5-libs, zlib]
@@ -75,6 +78,64 @@ tools:
     version: 1.6.0
     commands: [podman-compose]
     check: podman-compose version
+
+  # The GitHub Actions self-hosted runner, unpacked root-owned and read-only.
+  # It writes its registration and logs into its own folder, so at deployment
+  # a VM copies it into the runner user's home and registers there (see the
+  # gh-runner images' notes). The image pins it, so register with
+  # --disableupdate: Renovate bumps it, and GitHub stops queueing jobs for a
+  # runner that misses an update for 30 days.
+  actions-runner:
+    method: archive
+    description: GitHub Actions runner, at /opt/actions-runner
+    requires: [runner-libraries, git]
+    # renovate: datasource=github-releases depName=actions/runner extractVersion=^v(?<version>.+)$
+    version: 2.338.2
+    url: https://github.com/actions/runner/releases/download/v{version}/actions-runner-linux-x64-{version}.tar.gz
+    release_notes_sha256: linux-x64
+    sha256: "baebf204307bac6193480852732f0aba2ae97b6c5597c244f4d5558390147c40"  # 2.338.2
+    extract_to: /opt/actions-runner
+    # As a deployment runs it: copied into the user's home, since it writes
+    # into its own folder even to print its version.
+    check: >-
+      sh -c 'cp -r /opt/actions-runner "$HOME/actions-runner" &&
+      "$HOME/actions-runner/bin/Runner.Listener" --version'
+
+  acl:
+    method: package
+    description: POSIX ACL tools (setfacl, getfacl)
+    packages:
+      Debian: [acl]
+      RedHat: [acl]
+
+  # The tool cache the pipelines' setup tasks share (setup-python and the
+  # like on GitHub, UsePythonVersion on Azure DevOps), at the path Microsoft's
+  # hosted runners use. Not world-writable, as on those: only members of the
+  # toolcache group can write to it, and everyone can read. The members are
+  # listed by name, so the account that runs jobs is one as soon as it
+  # exists: AzDevOps, which Azure DevOps makes when it adds a VM to a pool,
+  # and runner, which the gh-runner images' deployment makes.
+  hosted-toolcache:
+    method: directory
+    description: Shared tool cache at /opt/hostedtoolcache, writable by the toolcache group only
+    requires: [acl]
+    path: /opt/hostedtoolcache
+    group: toolcache
+    members: [AzDevOps, runner]
+    environment:
+      RUNNER_TOOL_CACHE: /opt/hostedtoolcache
+      AGENT_TOOLSDIRECTORY: /opt/hostedtoolcache
+    # The test user is not a member, so it must not be able to write.
+    check:
+      - stat -c '%U %G %a' /opt/hostedtoolcache
+      - getfacl --omit-header --absolute-names /opt/hostedtoolcache
+      - getent group toolcache
+      - sh -c '! touch /opt/hostedtoolcache/not-a-member 2>/dev/null'
+    expect:
+      - root toolcache 2775
+      - "default:group::rwx"
+      - "default:other::r-x"
+      - ":AzDevOps,runner"
 
   git:
     method: package

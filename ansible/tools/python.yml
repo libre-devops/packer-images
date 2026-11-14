@@ -39,6 +39,9 @@
     UV_PYTHON_DOWNLOADS: never
   register: tools_python_install
   changed_when: "'Installed' in tools_python_install.stderr"
+  until: tools_python_install is succeeded
+  retries: 5
+  delay: 30
 
 # The hardened umask is 027, so what uv writes is not readable by the users
 # who run the tool.

@@ -3,7 +3,8 @@
 # as scripts/images.py rendered them (image_tools), in order, each after the
 # tools it requires. A golden image runs this before the harden step, so the
 # lockdown role hardens the tools with the rest of the system; a role image
-# runs it on its base's finished, hardened system.
+# runs it on its base's finished, hardened system. Each method's task that
+# reaches the network retries, 5 times 30 seconds apart.
 - name: Install the image's tools
   hosts: all
   become: true

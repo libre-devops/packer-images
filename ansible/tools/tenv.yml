@@ -9,6 +9,9 @@
   environment: "{{ tools_environment }}"
   register: tools_tenv_install
   changed_when: "'already installed' not in (tools_tenv_install.stdout + tools_tenv_install.stderr)"
+  until: tools_tenv_install is succeeded
+  retries: 5
+  delay: 30
 
 - name: "Make the default {{ tool.name }} {{ tool.version }}"
   ansible.builtin.command:

@@ -1,0 +1,45 @@
+---
+# Method `directory`: a directory a group shares, such as the tool cache the
+# pipelines' setup tasks use. Owned by root and the group, and setgid, so what
+# is made in it stays in the group, with default ACLs so it stays
+# group-writable whatever the writer's umask (027 on these images). Members
+# can write, everyone can read, and nobody else can write: tighter than the
+# world-writable 777 of Microsoft's hosted images.
+- name: "Create the group for {{ tool.name }}"
+  ansible.builtin.group:
+    name: "{{ tool.group }}"
+    system: true
+    state: present
+
+# By name, so the accounts that run jobs are members as soon as they exist,
+# whoever makes them and whenever. usermod and gpasswd want the account to
+# exist already, so the member lists are written directly.
+- name: "List the members of the group for {{ tool.name }}"
+  ansible.builtin.replace:
+    path: "{{ item }}"
+    regexp: "^({{ tool.group }}:[^:]*:[^:]*:).*$"
+    replace: "\\g<1>{{ tool.members | join(',') }}"
+  loop: [/etc/group, /etc/gshadow]
+
+- name: "Create the directory for {{ tool.name }}"
+  ansible.builtin.file:
+    path: "{{ tool.path }}"
+    state: directory
+    owner: root
+    group: "{{ tool.group }}"
+    mode: "2775"
+
+- name: "Keep what members write group-writable and readable by everyone, for {{ tool.name }}"
+  ansible.posix.acl:
+    path: "{{ tool.path }}"
+    etype: "{{ item.etype }}"
+    permissions: "{{ item.permissions }}"
+    default: true
+    state: present
+  loop:
+    - {etype: user, permissions: rwx}
+    - {etype: group, permissions: rwx}
+    - {etype: mask, permissions: rwx}
+    - {etype: other, permissions: rx}
+  loop_control:
+    label: "default {{ item.etype }} {{ item.permissions }}"

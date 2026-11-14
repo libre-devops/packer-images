@@ -4,7 +4,7 @@
 
 Azure DevOps scale set agent, on the hardened rhel-9 image.
 
-Azure DevOps installs the Azure Pipelines agent itself when it adds a VM to a scale set pool, as Microsoft advises, so the image does not. It has the libraries the agent needs and the tools pipelines use. Podman, with the docker command, comes from the base image. Its QEMU target builds on AlmaLinux 9, as rhel-9's does.
+Azure DevOps installs the Azure Pipelines agent itself when it adds a VM to a scale set pool, as Microsoft advises, so the image does not. It has the libraries the agent needs and the tools pipelines use. The shared tool cache at /opt/hostedtoolcache is writable by the AzDevOps account that Azure DevOps makes, and by no one else. Podman, with the docker command, comes from the base image. Its QEMU target builds on AlmaLinux 9, as rhel-9's does.
 
 ## Built from
 
@@ -16,7 +16,9 @@ From the catalogue in [`tools/tools.yml`](../../tools/tools.yml). Installed afte
 
 | Tool | Version | Installed from | What |
 |---|---|---|---|
-| `azure-pipelines-agent-deps` | the distribution's | the base image's signed packages, patched at every build | Libraries the Azure Pipelines agent needs (ICU, Kerberos, zlib) |
+| `runner-libraries` | the distribution's | the base image's signed packages, patched at every build | Libraries the Azure Pipelines agent and the GitHub Actions runner need (ICU, Kerberos, zlib) |
+| `acl` | the distribution's | the base image's signed packages, patched at every build | POSIX ACL tools (setfacl, getfacl) |
+| `hosted-toolcache` | none | a directory the image makes, owned by root and a group | Shared tool cache at /opt/hostedtoolcache, writable by the toolcache group only |
 | `git` | the distribution's | the base image's signed packages, patched at every build | Git |
 | `jq` | the distribution's | the base image's signed packages, patched at every build | jq |
 | `python` | the distribution's | the base image's signed packages, patched at every build | Python 3.12, the base image's own |

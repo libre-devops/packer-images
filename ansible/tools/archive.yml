@@ -1,6 +1,8 @@
 ---
 # Method `archive`: a release archive, refused unless it matches the SHA-256
-# pinned in the catalogue. Only the binaries named in `files` are kept.
+# pinned in the catalogue. Either only the binaries named in `files` are kept,
+# in /usr/local/bin, or with `extract_to` the whole archive goes to that
+# directory, owned by root and readable by every user.
 - name: "Download {{ tool.name }} {{ tool.version }}"
   ansible.builtin.get_url:
     url: "{{ tool.url }}"
@@ -9,29 +11,49 @@
     owner: root
     group: root
     mode: "0600"
-
-- name: "Create a directory to unpack {{ tool.name }}"
-  ansible.builtin.file:
-    path: "{{ tools_downloads }}/{{ tool.name }}"
-    state: directory
-    owner: root
-    group: root
-    mode: "0700"
+  register: tools_download
+  until: tools_download is succeeded
+  retries: 5
+  delay: 30
 
 - name: "Unpack {{ tool.name }}"
-  ansible.builtin.unarchive:
-    src: "{{ tools_downloads }}/{{ tool.name }}.archive"
-    dest: "{{ tools_downloads }}/{{ tool.name }}"
-    remote_src: true
+  vars:
+    tools_unpack: "{{ tool.extract_to | default(tools_downloads ~ '/' ~ tool.name) }}"
+  block:
+    - name: "Create the directory to unpack {{ tool.name }}"
+      ansible.builtin.file:
+        path: "{{ tools_unpack }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "{{ '0755' if tool.extract_to is defined else '0700' }}"
 
-- name: "Install the commands from {{ tool.name }}"
-  ansible.builtin.copy:
-    src: "{{ tools_downloads }}/{{ tool.name }}/{{ item.value }}"
-    dest: "{{ tools_bin }}/{{ item.key }}"
-    remote_src: true
-    owner: root
-    group: root
-    mode: "0755"
-  loop: "{{ tool.files | dict2items }}"
-  loop_control:
-    label: "{{ tools_bin }}/{{ item.key }}"
+    - name: "Unpack {{ tool.name }}"
+      ansible.builtin.unarchive:
+        src: "{{ tools_downloads }}/{{ tool.name }}.archive"
+        dest: "{{ tools_unpack }}"
+        remote_src: true
+        owner: root
+        group: root
+
+    # The hardened umask is 027, and the archive's own modes vary.
+    - name: "Make readable by every user {{ tool.name }}"
+      when: tool.extract_to is defined
+      ansible.builtin.file:
+        path: "{{ tools_unpack }}"
+        owner: root
+        group: root
+        mode: u=rwX,go=rX
+        recurse: true
+
+    - name: "Install the commands from {{ tool.name }}"
+      ansible.builtin.copy:
+        src: "{{ tools_unpack }}/{{ item.value }}"
+        dest: "{{ tools_bin }}/{{ item.key }}"
+        remote_src: true
+        owner: root
+        group: root
+        mode: "0755"
+      loop: "{{ (tool.files | default({})) | dict2items }}"
+      loop_control:
+        label: "{{ tools_bin }}/{{ item.key }}"

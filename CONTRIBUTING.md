@@ -76,13 +76,16 @@ Renovate cannot bump ISOs, so do it by hand when a point release comes out:
    - `archive` for a release archive: `url` and, where the vendor publishes them, `checksums`, both with `{version}`, and `files`, each command and its path in the archive. Leave `sha256` empty.
    - `python` for a PyPI application: `package`, `requires: [python, uv]`, and its `commands`, or `modules` for one whose script would pick up any Python on PATH.
    - `tenv` for a Terraform or OpenTofu version, with `requires: [tenv]`.
+   - `directory` for a directory a group shares, with `path` under `/opt`, `group`, the `members` allowed to write by account name, and `requires: [acl]`.
+
+   Each method's tasks retry their network operations, so a new method must as well (`until`, `retries`, `delay`).
 
    Give a versioned tool a `# renovate:` comment on the line above `version`, with the datasource and name, so Renovate bumps it. Give it a `check`, a command that prints its version, which the test runs as an unprivileged user. Put any environment variable it needs under `environment`.
 2. Run `just pin-tools <tool>`. It writes the archive's SHA-256 after checking it against the vendor's checksums, or the Python tool's hash-locked requirements in `tools/locks/`.
 3. Add its name to `tools` in each image's `image.yml` that needs it. What it requires comes with it.
 4. Run `just validate`, `just docs` and `just all <image>`, and attach the audit summary to the pull request.
 
-When Renovate bumps a tool, the Pins workflow ([`pins.yml`](./.github/workflows/pins.yml)) runs `just repin` on its branch: it pins the new SHA-256 against the vendor's checksums or relocks the Python tool, commits that as one commit GitHub signs, and starts the checks on it. Nobody edits a hash by hand. On a branch from a fork, run `just repin` yourself. Either way, the build refuses an archive that does not match its pin, and `just validate` refuses a lock or a SHA-256 pinned for another version.
+When Renovate bumps a tool, the Pins workflow ([`pins.yml`](./.github/workflows/pins.yml)) runs `just repin` on its branch: it pins the new SHA-256 against the vendor's checksums or relocks the Python tool, pushes that to the branch as `github-actions[bot]`, and starts the checks on it. Nobody edits a hash by hand. On a branch from a fork, run `just repin` yourself. Either way, the build refuses an archive that does not match its pin, and `just validate` refuses a lock or a SHA-256 pinned for another version.
 
 ## Add a role image
 

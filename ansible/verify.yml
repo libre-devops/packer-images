@@ -140,6 +140,11 @@
       register: verify_tool_runs
       changed_when: false
       failed_when: false
+      # A check that reaches the network can fail for a moment; one that is
+      # broken fails every time.
+      until: verify_tool_runs.rc == 0
+      retries: 3
+      delay: 10
       loop: "{{ image_tools | selectattr('check', 'defined') | subelements('check') }}"
       loop_control:
         label: "{{ item.1 }}"
@@ -149,7 +154,7 @@
         that:
           - runs | map(attribute='rc') | select('ne', 0) | list | length == 0
           - item.version is not defined or item.version in output
-          - item.expect is not defined or item.expect in output
+          - item.expect | default([]) | reject('in', output) | list | length == 0
         fail_msg: >-
           {{ item.name }}: {{ runs | map(attribute='cmd') | map('join', ' ') | list }} gave exit codes
           {{ runs | map(attribute='rc') | list }}, expected {{ item.version | default('no version') }}

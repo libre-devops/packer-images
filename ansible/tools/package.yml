@@ -4,17 +4,25 @@
 #
 # On Debian, without recommended packages, so an image has only what the
 # catalogue names. Ubuntu's recommends reach well past what a tool needs:
-# podman's pull in passt, whose AppArmor profile the lockdown role's
-# aa-complain cannot parse, which fails CIS 1.3.1.3.
+# podman's pull in buildah and passt, whose AppArmor profile noble's AppArmor
+# tools cannot even parse.
 - name: "Install the packages for {{ tool.name }}"
   when: ansible_facts['os_family'] == 'Debian'
   ansible.builtin.apt:
     name: "{{ tool.packages.Debian }}"
     state: present
     install_recommends: false
+  register: tools_apt
+  until: tools_apt is succeeded
+  retries: 5
+  delay: 30
 
 - name: "Install the packages for {{ tool.name }}"
   when: ansible_facts['os_family'] != 'Debian'
   ansible.builtin.package:
     name: "{{ tool.packages[ansible_facts['os_family']] }}"
     state: present
+  register: tools_package
+  until: tools_package is succeeded
+  retries: 5
+  delay: 30

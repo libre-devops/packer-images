@@ -30,6 +30,8 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
+import urllib.error
 import urllib.request
 import zipfile
 from dataclasses import dataclass, field
@@ -48,7 +50,7 @@ LOCKS = ROOT / "tools" / "locks"
 
 # How the tools in the catalogue install, each an Ansible task file in
 # ansible/tools/, and the OS families a package tool must name packages for.
-METHODS = ("package", "archive", "python", "tenv")
+METHODS = ("package", "archive", "python", "tenv", "directory")
 FAMILIES = ("Debian", "RedHat")
 
 # The exception registry's rules. An exception is decided for at most a year
@@ -534,9 +536,11 @@ def render_tool(name: str, catalogue: dict[str, dict]) -> dict:
     """One tool as the Ansible tools step and the test take it."""
     tool = catalogue[name]
     out: dict = {"name": name, "method": tool["method"]}
-    for key in ("packages", "files", "commands", "modules", "environment", "configure", "package", "tenv", "expect"):
+    for key in ("packages", "files", "extract_to", "commands", "modules", "environment", "configure", "package", "tenv", "path", "group", "members"):
         if key in tool:
             out[key] = tool[key]
+    if "expect" in tool:
+        out["expect"] = [str(e) for e in tool["expect"]] if isinstance(tool["expect"], list) else [str(tool["expect"])]
     if "check" in tool:
         out["check"] = [str(c) for c in tool["check"]] if isinstance(tool["check"], list) else [str(tool["check"])]
     if "version" in tool:
@@ -573,9 +577,9 @@ def catalogue_problems(catalogue: dict[str, dict]) -> list[str]:
             packages = tool.get("packages")
             if not isinstance(packages, dict) or not all(isinstance(packages.get(f), list) and packages.get(f) for f in FAMILIES):
                 problems.append(f"{where}: packages must list the packages for each of {', '.join(FAMILIES)}")
-        elif not version:
+        elif method in ("archive", "python", "tenv") and not version:
             problems.append(f"{where}: a {method} tool needs a pinned version")
-        elif not re.search(r"#\s*renovate:[^\n]*\n\s*version:", blocks.get(name, "")):
+        elif version and not re.search(r"#\s*renovate:[^\n]*\n\s*version:", blocks.get(name, "")):
             problems.append(f"{where}: put a `# renovate:` comment on the line above version, so Renovate bumps it")
 
         if method == "archive":
@@ -587,8 +591,11 @@ def catalogue_problems(catalogue: dict[str, dict]) -> list[str]:
             elif pin.group(2) != version:
                 problems.append(f"{where}: sha256 was pinned for {pin.group(2)}, not {version}: run `just pin-tools {name}`")
             files = tool.get("files")
-            if not isinstance(files, dict) or not files:
-                problems.append(f"{where}: files must map each command to its path in the archive")
+            extract_to = tool.get("extract_to")
+            if extract_to is not None and not (isinstance(extract_to, str) and extract_to.startswith("/opt/")):
+                problems.append(f"{where}: extract_to must be a directory under /opt")
+            if extract_to is None and (not isinstance(files, dict) or not files):
+                problems.append(f"{where}: files must map each command to its path in the archive, or extract_to name where the whole archive goes")
         if method == "python":
             if not tool.get("package"):
                 problems.append(f"{where}: no package, the name on PyPI")
@@ -611,6 +618,19 @@ def catalogue_problems(catalogue: dict[str, dict]) -> list[str]:
             if not tool.get("tenv"):
                 problems.append(f"{where}: no tenv, the tenv subcommand for the tool, such as tf")
 
+        if method == "directory":
+            if not (isinstance(tool.get("path"), str) and tool["path"].startswith("/opt/")):
+                problems.append(f"{where}: path must be a directory under /opt")
+            if not (isinstance(tool.get("group"), str) and re.fullmatch(r"[a-z_][a-z0-9_-]*", tool["group"])):
+                problems.append(f"{where}: group must be a group name")
+            members = tool.get("members")
+            if not isinstance(members, list) or not members or not all(isinstance(m, str) and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.-]*", m) for m in members):
+                problems.append(f"{where}: members must list the account names that may write to it")
+            if not any(((catalogue.get(r) or {}).get("packages") or {}).get("Debian") == ["acl"] for r in requires):
+                problems.append(f"{where}: must require the acl tool, for its default ACLs")
+        if "expect" in tool and not (isinstance(tool["expect"], str) or (isinstance(tool["expect"], list) and all(isinstance(e, str) for e in tool["expect"]))):
+            problems.append(f"{where}: expect must be a string, or a list of them, that the checks' output must contain")
+
         environment = tool.get("environment")
         if environment is not None and (not isinstance(environment, dict) or not all(isinstance(v, str) for v in environment.values())):
             problems.append(f"{where}: environment must map each variable to a quoted string")
@@ -625,14 +645,15 @@ def catalogue_problems(catalogue: dict[str, dict]) -> list[str]:
     return problems
 
 
-def pin_archive(name: str, tool: dict) -> str:
-    """Download a tool's archive and return its SHA-256, after checking it against the vendor's checksums."""
+def pin_archive(name: str, tool: dict) -> tuple[str, list[str]]:
+    """Download a tool's archive and return its SHA-256 and what it was checked against."""
     url = fill(tool["url"], tool)
     asset = url.rsplit("/", 1)[-1]
     with tempfile.TemporaryDirectory() as tmp:
         work = Path(tmp)
         download(url, work / asset)
         digest = hashlib.sha256((work / asset).read_bytes()).hexdigest()
+        checked: list[str] = []
         if tool.get("checksums"):
             download(fill(tool["checksums"], tool), work / "checksums")
             listed = [
@@ -644,7 +665,29 @@ def pin_archive(name: str, tool: dict) -> str:
                 raise Failure(f"{name}: {asset} is not in the vendor's checksums at {fill(tool['checksums'], tool)}")
             if listed[0].lower() != digest:
                 raise Failure(f"{name}: {asset} has SHA-256 {digest}, but the vendor's checksums say {listed[0]}")
-    return digest
+            checked.append("the vendor's checksums")
+    release = GITHUB_RELEASE.match(url)
+    if release:
+        # GitHub's own SHA-256 of the asset, taken when it was uploaded, and
+        # the vendor's in the release notes where it publishes it there.
+        repository, tag, _ = release.groups()
+        data = github_api(f"repos/{repository}/releases/tags/{tag}")
+        recorded = next((a.get("digest") for a in data.get("assets") or [] if a.get("name") == asset), None)
+        if recorded and recorded != f"sha256:{digest}":
+            raise Failure(f"{name}: {asset} has SHA-256 {digest}, but GitHub recorded {recorded} when it was uploaded")
+        if recorded:
+            checked.append("GitHub's digest")
+        marker = tool.get("release_notes_sha256")
+        if marker:
+            noted = re.search(rf"BEGIN SHA {re.escape(str(marker))} -->\s*([0-9a-f]{{64}})", data.get("body") or "")
+            if not noted:
+                raise Failure(f"{name}: the release notes for {tag} give no SHA-256 for {marker}")
+            if noted.group(1) != digest:
+                raise Failure(f"{name}: {asset} has SHA-256 {digest}, but the release notes say {noted.group(1)}")
+            checked.append("the release notes")
+    if not checked:
+        print(f"images.py: warning: {name}: nothing to check {asset} against; pinned to its own SHA-256", file=sys.stderr)
+    return digest, checked
 
 
 def pin_python(name: str, tool: dict, catalogue: dict[str, dict]) -> None:
@@ -694,10 +737,48 @@ def tools_dir() -> Path:
     return Path(os.environ.get("TOOLS_DIR") or ROOT / ".tools")
 
 
-def download(url: str, dest: Path) -> None:
-    request = urllib.request.Request(url, headers={"User-Agent": "libre-devops-packer-images"})
-    with urllib.request.urlopen(request, timeout=120) as response, dest.open("wb") as handle:
-        shutil.copyfileobj(response, handle)
+# A download or git fetch that fails retries this many times, waiting longer
+# each time, so a network that fails for a moment does not fail a build.
+NETWORK_ATTEMPTS = 5
+
+
+def retry_wait(attempt: int, what: str, error: object) -> None:
+    wait = 10 * attempt
+    print(f"images.py: {what} failed ({error}); trying again in {wait}s ({attempt}/{NETWORK_ATTEMPTS})", file=sys.stderr)
+    time.sleep(wait)
+
+
+def download(url: str, dest: Path, headers: dict[str, str] | None = None) -> None:
+    request = urllib.request.Request(url, headers={"User-Agent": "libre-devops-packer-images", **(headers or {})})
+    for attempt in range(1, NETWORK_ATTEMPTS + 1):
+        try:
+            with urllib.request.urlopen(request, timeout=120) as response, dest.open("wb") as handle:
+                shutil.copyfileobj(response, handle)
+            return
+        except urllib.error.HTTPError as error:
+            # A missing file stays missing; a busy or failing server may not.
+            if attempt == NETWORK_ATTEMPTS or (400 <= error.code < 500 and error.code != 429):
+                raise
+            retry_wait(attempt, f"downloading {url}", error)
+        except (urllib.error.URLError, TimeoutError, ConnectionError, OSError) as error:
+            if attempt == NETWORK_ATTEMPTS:
+                raise
+            retry_wait(attempt, f"downloading {url}", error)
+
+
+# A release asset on GitHub, whose release the API describes.
+GITHUB_RELEASE = re.compile(r"^https://github\.com/([\w.-]+/[\w.-]+)/releases/download/([^/]+)/([^/]+)$")
+
+
+def github_api(path: str) -> dict:
+    """GET from the GitHub API, with GITHUB_TOKEN or GH_TOKEN if set, for the rate limit."""
+    headers = {"Accept": "application/vnd.github+json"}
+    token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    with tempfile.TemporaryDirectory() as tmp:
+        download(f"https://api.github.com/{path}", Path(tmp) / "response.json", headers)
+        return json.loads((Path(tmp) / "response.json").read_text(encoding="utf-8"))
 
 
 def verify_hashicorp_signature(sums: Path, signature: Path) -> None:
@@ -755,6 +836,20 @@ def git(*args: str, cwd: Path | None = None) -> str:
     return subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True, text=True).stdout.strip()
 
 
+def git_network(*args: str, cwd: Path | None = None, clean: Path | None = None) -> str:
+    """A git command that reaches the network (clone or fetch), retried. `clean` is removed before each retry."""
+    for attempt in range(1, NETWORK_ATTEMPTS + 1):
+        try:
+            return git(*args, cwd=cwd)
+        except subprocess.CalledProcessError as error:
+            if attempt == NETWORK_ATTEMPTS:
+                raise
+            if clean is not None:
+                shutil.rmtree(clean, ignore_errors=True)
+            retry_wait(attempt, f"git {args[0]}", (error.stderr or "").strip().splitlines()[-1:] or error)
+    raise AssertionError("unreachable")
+
+
 def cmd_deps(args: argparse.Namespace) -> None:
     for name in args.images or image_names():
         image = Image.load(name)
@@ -778,10 +873,10 @@ def matching_audit_commit(image: Image) -> tuple[str, str]:
     audit = image.audit
     history = CACHE / "audit" / f"{image.audit_name}.git"
     if history.is_dir():
-        git("fetch", "--quiet", "--filter=blob:none", "origin", f"+refs/heads/{audit['branch']}:refs/heads/{audit['branch']}", cwd=history)
+        git_network("fetch", "--quiet", "--filter=blob:none", "origin", f"+refs/heads/{audit['branch']}:refs/heads/{audit['branch']}", cwd=history)
     else:
         history.parent.mkdir(parents=True, exist_ok=True)
-        git("clone", "--quiet", "--bare", "--filter=blob:none", "--single-branch", "--branch", audit["branch"], audit["repo"], str(history))
+        git_network("clone", "--quiet", "--bare", "--filter=blob:none", "--single-branch", "--branch", audit["branch"], audit["repo"], str(history), clean=history)
     released = role_date(image)
     commit = git("rev-list", "-1", f"--before={released}", f"refs/heads/{audit['branch']}", cwd=history)
     if not commit:
@@ -840,7 +935,7 @@ def cmd_pin_tools(args: argparse.Namespace) -> None:
             print(f"{name}: {tool['version']} already locked", file=sys.stderr)
             continue
         if tool.get("method") == "archive":
-            digest = pin_archive(name, tool)
+            digest, checked = pin_archive(name, tool)
             block = tool_blocks(text)[name]
             line = f'    sha256: "{digest}"  # {tool["version"]}'
             updated, count = re.subn(r"^    sha256:.*$", lambda _: line, block, count=1, flags=re.MULTILINE)
@@ -848,9 +943,9 @@ def cmd_pin_tools(args: argparse.Namespace) -> None:
                 raise Failure(f"tools/tools.yml {name}: no sha256 line to update")
             if updated != block:
                 text = text.replace(block, updated, 1)
-                print(f"{name}: pinned {tool['version']} to SHA-256 {digest[:16]}... (matches the vendor's checksums)", file=sys.stderr)
+                print(f"{name}: pinned {tool['version']} to SHA-256 {digest[:16]}... (matches {' and '.join(checked) or 'nothing else'})", file=sys.stderr)
             else:
-                print(f"{name}: {tool['version']} already pinned", file=sys.stderr)
+                print(f"{name}: {tool['version']} already pinned, and matches {' and '.join(checked) or 'nothing else'}", file=sys.stderr)
         elif tool.get("method") == "python":
             pin_python(name, tool, catalogue)
     CATALOGUE.write_text(text, encoding="utf-8")
@@ -864,7 +959,7 @@ def fetch_role(image: Image) -> None:
         return
     shutil.rmtree(dest, ignore_errors=True)
     dest.parent.mkdir(parents=True, exist_ok=True)
-    git("clone", "--quiet", "--depth", "1", "--branch", str(role["version"]), role["repo"], str(dest))
+    git_network("clone", "--quiet", "--depth", "1", "--branch", str(role["version"]), role["repo"], str(dest), clean=dest)
     head = git("rev-parse", "HEAD", cwd=dest)
     if head != role["commit"]:
         shutil.rmtree(dest)
@@ -881,7 +976,7 @@ def fetch_audit(image: Image) -> None:
     with tempfile.TemporaryDirectory() as tmp:
         work = Path(tmp)
         git("init", "--quiet", cwd=work)
-        git("fetch", "--quiet", "--depth", "1", audit["repo"], audit["commit"], cwd=work)
+        git_network("fetch", "--quiet", "--depth", "1", audit["repo"], audit["commit"], cwd=work)
         head = git("rev-parse", "FETCH_HEAD", cwd=work)
         if head != audit["commit"]:
             raise Failure(f"{image.audit_name}: fetched {head}, not the pinned {audit['commit']}")
@@ -1265,6 +1360,7 @@ def tools_section(image: Image, when: str) -> list[str]:
         "archive": "release archive, SHA-256 pinned",
         "python": "own Python environment, hash-locked requirements",
         "tenv": "through tenv, HashiCorp's signature checked",
+        "directory": "a directory the image makes, owned by root and a group",
     }
     lines = [
         "## Tools",
@@ -1276,7 +1372,7 @@ def tools_section(image: Image, when: str) -> list[str]:
     ]
     for name in image_tools(image, catalogue):
         tool = catalogue[name]
-        version = f"`{tool['version']}`" if "version" in tool else "the distribution's"
+        version = f"`{tool['version']}`" if "version" in tool else "the distribution's" if tool["method"] == "package" else "none"
         lines.append(f"| `{name}` | {version} | {how[tool['method']]} | {cell(tool.get('description'))} |")
     return lines
 

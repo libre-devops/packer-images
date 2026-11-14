@@ -22,7 +22,10 @@ Notable changes to these images and their build. The format follows [Keep a Chan
 - The tool catalogue, `tools/tools.yml`, with four install methods (distribution packages, SHA-256 pinned release archives, Python applications in their own environments from hash-locked requirements, and Terraform through tenv), `just pin-tools`, and Renovate for the versions. The test runs each tool as an unprivileged user and checks the pinned version.
 - Podman, with the docker command, in both golden images, installed before the harden step.
 - `azdo-agent-rhel-9`, the same Azure DevOps agent image on `rhel-9`, with its own workflow.
-- The Pins workflow: on Renovate's pull requests it runs `just repin`, which pins each new tool version's SHA-256 or Python lock and each new role's audit content, commits that to the branch as one commit GitHub signs, and starts the checks on it.
+- `gh-runner-ubuntu-24.04` and `gh-runner-rhel-9`, GitHub Actions self-hosted runner images with the same tools and the runner pinned at `/opt/actions-runner`, checked against its release notes and GitHub's digest. An archive tool can now unpack whole (`extract_to`), and every pin of a GitHub release asset is also checked against GitHub's recorded SHA-256.
+- A shared tool cache, `/opt/hostedtoolcache`, in the agent and runner images, for the pipelines' setup tasks: owned by root and the `toolcache` group, setgid, with default ACLs, writable only by the accounts that run jobs (listed by name), where Microsoft's images make it world-writable. A `directory` method in the catalogue, and `expect` can list several strings.
+- Retries on every network operation: Ansible's package, download and install tasks, apt's downloads (kept in the Ubuntu images), `images.py`'s downloads and git fetches, `packer init`, and the build itself once more from the start (`BUILD_ATTEMPTS`), so one failure does not fail a pipeline.
+- The Pins workflow: on Renovate's pull requests it runs `just repin`, which pins each new tool version's SHA-256 or Python lock and each new role's audit content, pushes that to the branch, and starts the checks on it. The repository allows only squash merges, so every commit on `main` is signed.
 
 ### Changed
 

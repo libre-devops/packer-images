@@ -1,5 +1,8 @@
 ---
 # Build step 1: the base system. Runs as the build account, over the build key.
+#
+# Every task that reaches the network retries, 5 times 30 seconds apart, so a
+# mirror or DNS failing for a moment does not fail a build.
 - name: Prepare the base system
   hosts: all
   become: true
@@ -20,17 +23,37 @@
           # own seed can cause. The test step checks the image's first boot.
           failed_when: base_cloud_init.rc not in [0, 2]
 
+        # Every apt run retries a failed download, the lockdown role's
+        # included, and so do pipelines on every VM built from the image.
+        - name: Make apt retry failed downloads
+          ansible.builtin.copy:
+            dest: /etc/apt/apt.conf.d/80-retries
+            content: |
+              // A single failed download should not fail a build or a pipeline.
+              Acquire::Retries "10";
+            owner: root
+            group: root
+            mode: "0644"
+
         - name: Upgrade every package
           ansible.builtin.apt:
             update_cache: true
             upgrade: dist
             autoremove: true
             lock_timeout: 300
+          register: base_apt_upgrade
+          until: base_apt_upgrade is succeeded
+          retries: 5
+          delay: 30
 
         - name: Install the guest agent for the target
           ansible.builtin.apt:
             name: "{{ base_guest_agents[image_target] }}"
             state: present
+          register: base_apt_agent
+          until: base_apt_agent is succeeded
+          retries: 5
+          delay: 30
 
         - name: Check whether an upgrade needs a reboot
           ansible.builtin.stat:
@@ -64,12 +87,19 @@
             group: root
             mode: "0644"
 
+        # dnf retries each download itself, but not a mirror that answers
+        # with empty metadata, which failed a build on 13 November 2026, so
+        # the whole task retries.
         - name: Upgrade every package  # noqa: package-latest - upgrading everything is the point
           ansible.builtin.dnf:
             name: "*"
             state: latest
             update_cache: true
           notify: Reboot into the upgraded system
+          register: base_dnf_upgrade
+          until: base_dnf_upgrade is succeeded
+          retries: 5
+          delay: 30
 
         # The minimal install has no tar either, which the audit, Ansible's
         # unarchive and most agent installers need.
@@ -77,6 +107,10 @@
           ansible.builtin.dnf:
             name: "{{ ['cloud-init', 'tar'] + base_guest_agents[image_target] }}"
             state: present
+          register: base_dnf_install
+          until: base_dnf_install is succeeded
+          retries: 5
+          delay: 30
 
         - name: Remove packages nothing needs
           ansible.builtin.dnf:

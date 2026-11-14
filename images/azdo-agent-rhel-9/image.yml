@@ -14,12 +14,15 @@ notes:
   - >-
     Azure DevOps installs the Azure Pipelines agent itself when it adds a VM to
     a scale set pool, as Microsoft advises, so the image does not. It has the
-    libraries the agent needs and the tools pipelines use. Podman, with the
+    libraries the agent needs and the tools pipelines use. The shared tool
+    cache at /opt/hostedtoolcache is writable by the AzDevOps account that
+    Azure DevOps makes, and by no one else. Podman, with the
     docker command, comes from the base image. Its QEMU target builds on
     AlmaLinux 9, as rhel-9's does.
 
 tools:
-  - azure-pipelines-agent-deps
+  - runner-libraries
+  - hosted-toolcache
   - git
   - jq
   - python

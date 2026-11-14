@@ -17,7 +17,7 @@ workdir=$(mktemp -d)
 trap 'rm -rf -- "$workdir"' EXIT
 ssh-keygen -q -t ed25519 -N '' -f "$workdir/key"
 
-packer init "$repo/images/$image" >/dev/null
+"$repo/scripts/retry.sh" 3 20 packer init "$repo/images/$image" >/dev/null
 for target in $("${images[@]}" targets "$image"); do
 	"${images[@]}" render "$image" "$target" --workdir "$workdir" --output "$workdir/out" --ssh-key "$workdir/key" --placeholder-base
 	packer validate -only="$image.$target.image" -var-file="$workdir/build.pkrvars.json" "$repo/images/$image"
