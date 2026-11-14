@@ -22,7 +22,7 @@ From the catalogue in [`tools/tools.yml`](../../tools/tools.yml). Installed afte
 | `git` | the distribution's | the base image's signed packages, patched at every build | Git |
 | `jq` | the distribution's | the base image's signed packages, patched at every build | jq |
 | `python` | the distribution's | the base image's signed packages, patched at every build | Python 3.12, the base image's own |
-| `uv` | `0.13.7` | release archive, SHA-256 pinned | uv, the Python package and project manager |
+| `uv` | `0.13.6` | release archive, SHA-256 pinned | uv, the Python package and project manager |
 | `azure-cli` | `2.92.0` | own Python environment, hash-locked requirements | Azure CLI |
 | `ansible` | `14.6.0` | own Python environment, hash-locked requirements | Ansible, with the community collections |
 | `tenv` | `4.15.1` | release archive, SHA-256 pinned | tenv, the Terraform and OpenTofu version manager |
