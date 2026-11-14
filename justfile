@@ -23,7 +23,7 @@ images:
 targets image:
     @{{ images }} targets '{{ image }}'
 
-# Install the pinned Packer, checking HashiCorp's signature and the SHA-256.
+# Install the pinned Packer and gitleaks into .tools/bin, checking each download.
 tools:
     uv run --quiet scripts/images.py tools
 
@@ -86,8 +86,9 @@ all image target="qemu": (build image target) (test image target)
 gate image target="qemu":
     {{ images }} gate '{{ image }}' '{{ target }}' "$(find 'output/{{ image }}/{{ target }}/audit' -maxdepth 1 -name '*.json' -print -quit)" --summary 'output/{{ image }}/{{ target }}/audit/summary.md'
 
-# Scan the full git history for secrets (needs gitleaks on PATH).
+# Scan the full git history for secrets, with the pinned gitleaks.
 secrets:
+    uv run --quiet scripts/images.py tools gitleaks
     gitleaks git --redact --verbose .
 
 # Delete build output, or one image's: just clean ubuntu-24.04

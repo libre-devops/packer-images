@@ -116,6 +116,7 @@ ANSIBLE_CONFIG="$repo/ansible.cfg" ansible-playbook \
 	-e "@$workdir/tools.yml" \
 	-e image_target="$target" \
 	-e verify_audit_archive="$("${images[@]}" audit-archive "$image")" \
+	-e verify_audit_binary="$("${images[@]}" audit-binary "$image")" \
 	-e verify_audit_output="$out/audit/" \
 	"$repo/ansible/verify.yml"
 

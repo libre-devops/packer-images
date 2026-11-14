@@ -1,7 +1,11 @@
 ---
-# Tools the builds download, pinned. Renovate bumps the lines marked
-# `renovate:`. `just tools` checks each download against the vendor's signed
-# checksums, using the keys in keys/, so no hash is recorded here.
+# The build's own tools, pinned. Renovate bumps the lines marked `renovate:`.
+# `just tools` installs them into .tools/bin and checks each download, so no
+# hash is recorded here: Packer against HashiCorp's signed checksums, with the
+# key in keys/, and gitleaks, which signs nothing, against both its release's
+# checksums and GitHub's recorded SHA-256 of the archive.
 tools:
   # renovate: datasource=github-releases depName=hashicorp/packer extractVersion=^v(?<version>.+)$
   packer: 1.16.2
+  # renovate: datasource=github-releases depName=gitleaks/gitleaks extractVersion=^v(?<version>.+)$
+  gitleaks: 8.30.1

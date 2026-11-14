@@ -121,6 +121,11 @@
         setup_audit: true
         audit_content: archive
         audit_conf_source: "{{ verify_audit_archive }}"
+        # goss comes from the build host, where `just deps` downloads it with
+        # retries and checks it against the role's pinned SHA-256, so the test
+        # VM downloads nothing.
+        get_audit_binary_method: copy
+        audit_bin_copy_location: "{{ verify_audit_binary }}"
         fetch_audit_output: true
         audit_output_destination: "{{ verify_audit_output }}"
 

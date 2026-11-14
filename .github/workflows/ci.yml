@@ -19,10 +19,6 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  # From the release's checksums file. Renovate cannot update a pinned download,
-  # so bump both together when moving to a new gitleaks release.
-  GITLEAKS_VERSION: 8.30.1
-  GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
   JUST_VERSION: 1.59.0
 
 jobs:
@@ -40,16 +36,14 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Install gitleaks
-        run: |
-          archive="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
-          curl -sSfL -o "$RUNNER_TEMP/$archive" \
-            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/$archive"
-          echo "${GITLEAKS_SHA256}  $RUNNER_TEMP/$archive" | sha256sum -c -
-          tar -xzf "$RUNNER_TEMP/$archive" -C "$RUNNER_TEMP" gitleaks
+      - name: Install uv
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
 
       - name: Scan every commit
-        run: '"$RUNNER_TEMP/gitleaks" git --redact --verbose .'
+        # Installs the pinned gitleaks into .tools, checking its download.
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: uvx --from "rust-just==${JUST_VERSION}" just secrets
 
   lint:
     name: Lint and validate

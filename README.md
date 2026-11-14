@@ -163,8 +163,8 @@ With KVM, a build takes 8 to 15 minutes and the test a few more on a 32 core mac
 |---|---|
 | `just images` | Lists the images. |
 | `just targets <image>` | Lists an image's targets, which are its Packer source types. |
-| `just tools` | Installs the pinned Packer into `.tools`, after checking HashiCorp's signature on the release checksums and the archive's SHA-256. |
-| `just deps` | Installs the locked Python tools and the pinned collections, and fetches every image's lockdown role (refusing a tag that has moved) and audit content. |
+| `just tools` | Installs the pinned Packer and gitleaks into `.tools`, checking each download: Packer against HashiCorp's signed checksums, gitleaks against its release's checksums and GitHub's recorded SHA-256. |
+| `just deps` | Installs the locked Python tools and the pinned collections, and fetches every image's lockdown role (refusing a tag that has moved), its audit content, and the goss binary the role names, checked against the role's own SHA-256, which the test copies into the VM. |
 | `just lint` | yamllint, ansible-lint on the production profile, shellcheck, `packer fmt -check` and zizmor. |
 | `just validate` | Checks every image definition, hardening profile and exception, then runs `packer validate` for each image and target. |
 | `just build <image> [target]` | Builds into `output/<image>/<target>`. The target defaults to `qemu`. |
@@ -176,7 +176,7 @@ With KVM, a build takes 8 to 15 minutes and the test a few more on a 32 core mac
 | `just pin-tools [tool...]` | Pins the tools in `tools/tools.yml`: each archive's SHA-256, checked against the vendor's checksums, and each Python tool's hash-locked requirements. Run it after Renovate bumps a tool. |
 | `just pin-audit [image...]` | Pins each image's audit content to the commit that matches its role release. |
 | `just repin` | Brings every pin up to date with its version: tool SHA-256s and Python locks, audit content and READMEs. What a Renovate pull request needs; the Pins workflow runs it there. |
-| `just secrets` | Scans the full git history with gitleaks. |
+| `just secrets` | Scans the full git history with the pinned gitleaks. |
 | `just clean [image]` | Deletes build output. |
 
 CI runs these same recipes: [`ci.yml`](./.github/workflows/ci.yml) lints and validates every change, and each image's own workflow calls [`image.yml`](./.github/workflows/image.yml) to build, test and gate it on a GitHub-hosted runner with KVM. An image's workflow runs when anything it is built from changes, every Sunday for security updates, and by hand.

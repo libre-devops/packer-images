@@ -29,6 +29,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tarfile
 import tempfile
 import time
 import urllib.error
@@ -724,6 +725,45 @@ def cmd_targets(args: argparse.Namespace) -> None:
         print(target)
 
 
+def audit_binary(image: Image) -> tuple[str, str]:
+    """The goss URL and SHA-256, for x86-64, that the pinned lockdown role names in its defaults."""
+    defaults = load_yaml(image.role_dir / "defaults" / "main" / "audit.yml")
+    version = defaults.get("audit_bin_version") or {}
+    url = str(defaults.get("audit_bin_url", "")).replace("{{ audit_bin_version.release }}", str(version.get("release", ""))) + "AMD64"
+    checksum = str(version.get("AMD64_checksum", "")).removeprefix("sha256:")
+    if "{{" in url or not url.startswith("https://") or not re.fullmatch(r"[0-9a-f]{64}", checksum):
+        raise Failure(f"{image.role_name}: cannot read the goss URL and checksum from its defaults (got {url!r}, {checksum!r})")
+    return url, checksum
+
+
+def fetch_audit_binary(image: Image) -> Path:
+    """Download goss on the build host, with retries, checked against the role's own pinned SHA-256."""
+    url, checksum = audit_binary(image)
+    dest = CACHE / "audit" / f"goss-linux-amd64-{checksum[:16]}"
+    if dest.is_file() and hashlib.sha256(dest.read_bytes()).hexdigest() == checksum:
+        return dest
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory() as tmp:
+        work = Path(tmp) / "goss"
+        download(url, work)
+        actual = hashlib.sha256(work.read_bytes()).hexdigest()
+        if actual != checksum:
+            raise Failure(f"goss from {url}: SHA-256 {actual} does not match {image.role_name}'s pinned {checksum}")
+        shutil.move(work, dest)
+    dest.chmod(0o755)
+    print(f"Fetched goss for {image.role_name} (SHA-256 checked against the role's pin)", file=sys.stderr)
+    return dest
+
+
+def cmd_audit_binary(args: argparse.Namespace) -> None:
+    image = Image.load(args.image)
+    url, checksum = audit_binary(image)
+    dest = CACHE / "audit" / f"goss-linux-amd64-{checksum[:16]}"
+    if not dest.is_file():
+        raise Failure(f"goss for {image.role_name} is not fetched: run `just deps {image.name}` first")
+    print(dest)
+
+
 def cmd_audit_archive(args: argparse.Namespace) -> None:
     image = Image.load(args.image)
     if not image.audit_archive.is_file():
@@ -793,15 +833,30 @@ def verify_hashicorp_signature(sums: Path, signature: Path) -> None:
         raise Failure(f"{sums.name}: no valid signature from HashiCorp's key {HASHICORP_FINGERPRINT}\n{result.stderr}")
 
 
-def cmd_tools(_: argparse.Namespace) -> None:
-    version = str(load_yaml(ROOT / "versions.yml")["tools"]["packer"])
+def cmd_tools(args: argparse.Namespace) -> None:
+    """Install the build's own pinned tools into .tools/bin: Packer, gitleaks, or both."""
     bin_dir = tools_dir() / "bin"
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    for name in args.tools or ["packer", "gitleaks"]:
+        {"packer": install_packer, "gitleaks": install_gitleaks}[name](bin_dir)
+    finish_tools(bin_dir)
+
+
+def pinned_tool_version(name: str) -> str:
+    return str(load_yaml(ROOT / "versions.yml")["tools"][name])
+
+
+def installed_version(binary: Path, argument: str) -> str:
+    if not binary.is_file():
+        return ""
+    return subprocess.run([str(binary), argument], capture_output=True, text=True).stdout
+
+
+def install_packer(bin_dir: Path) -> None:
+    version = pinned_tool_version("packer")
     packer = bin_dir / "packer"
-    if packer.is_file():
-        current = subprocess.run([str(packer), "version"], capture_output=True, text=True).stdout
-        if current.startswith(f"Packer v{version}"):
-            finish_tools(bin_dir)
-            return
+    if installed_version(packer, "version").startswith(f"Packer v{version}"):
+        return
 
     arch = {"x86_64": "amd64", "amd64": "amd64", "aarch64": "arm64", "arm64": "arm64"}[platform.machine().lower()]
     base = f"https://releases.hashicorp.com/packer/{version}"
@@ -819,13 +874,44 @@ def cmd_tools(_: argparse.Namespace) -> None:
         actual = hashlib.sha256((work / archive).read_bytes()).hexdigest()
         if actual != expected:
             raise Failure(f"{archive}: SHA-256 {actual} does not match HashiCorp's {expected}")
-        bin_dir.mkdir(parents=True, exist_ok=True)
         with zipfile.ZipFile(work / archive) as bundle:
             bundle.extract("packer", work)
         shutil.move(work / "packer", packer)
         packer.chmod(0o755)
     print(f"Installed Packer {version} (signature and SHA-256 checked)", file=sys.stderr)
-    finish_tools(bin_dir)
+
+
+def install_gitleaks(bin_dir: Path) -> None:
+    """gitleaks signs nothing, so its archive must match both its checksums file and GitHub's recorded digest."""
+    version = pinned_tool_version("gitleaks")
+    gitleaks = bin_dir / "gitleaks"
+    if installed_version(gitleaks, "version").strip() == version:
+        return
+
+    arch = {"x86_64": "x64", "amd64": "x64", "aarch64": "arm64", "arm64": "arm64"}[platform.machine().lower()]
+    tag = f"v{version}"
+    base = f"https://github.com/gitleaks/gitleaks/releases/download/{tag}"
+    archive = f"gitleaks_{version}_linux_{arch}.tar.gz"
+    with tempfile.TemporaryDirectory() as tmp:
+        work = Path(tmp)
+        download(f"{base}/gitleaks_{version}_checksums.txt", work / "checksums.txt")
+        download(f"{base}/{archive}", work / archive)
+        actual = hashlib.sha256((work / archive).read_bytes()).hexdigest()
+        listed = next((line.split()[0] for line in (work / "checksums.txt").read_text().splitlines() if line.split()[-1:] == [archive]), None)
+        if listed != actual:
+            raise Failure(f"{archive}: SHA-256 {actual} does not match the release's checksums ({listed or 'not listed'})")
+        assets = github_api(f"repos/gitleaks/gitleaks/releases/tags/{tag}").get("assets") or []
+        recorded = next((a.get("digest") for a in assets if a.get("name") == archive), None)
+        if recorded != f"sha256:{actual}":
+            raise Failure(f"{archive}: SHA-256 {actual} does not match GitHub's recorded {recorded or 'nothing'}")
+        with tarfile.open(work / archive) as bundle:
+            member = bundle.getmember("gitleaks")
+            if not member.isfile():
+                raise Failure(f"{archive}: gitleaks is not a regular file")
+            bundle.extract(member, work, filter="data")
+        shutil.move(work / "gitleaks", gitleaks)
+        gitleaks.chmod(0o755)
+    print(f"Installed gitleaks {version} (SHA-256 checked against the release's checksums and GitHub's digest)", file=sys.stderr)
 
 
 def finish_tools(bin_dir: Path) -> None:
@@ -855,6 +941,7 @@ def cmd_deps(args: argparse.Namespace) -> None:
         image = Image.load(name)
         fetch_role(image)
         fetch_audit(image)
+        fetch_audit_binary(image)
 
 
 def role_date(image: Image) -> str:
@@ -1605,7 +1692,13 @@ def main() -> int:
     sub.add_argument("image")
     sub.set_defaults(func=cmd_audit_archive)
 
-    commands.add_parser("tools", help="install the pinned Packer, checking HashiCorp's signature").set_defaults(func=cmd_tools)
+    sub = commands.add_parser("audit-binary", help="print the path of the goss binary fetched for an image's lockdown role")
+    sub.add_argument("image")
+    sub.set_defaults(func=cmd_audit_binary)
+
+    sub = commands.add_parser("tools", help="install the pinned Packer and gitleaks into .tools/bin, checking each download")
+    sub.add_argument("tools", nargs="*", choices=["packer", "gitleaks"], metavar="tool")
+    sub.set_defaults(func=cmd_tools)
 
     sub = commands.add_parser("deps", help="fetch the pinned hardening role and audit content")
     sub.add_argument("images", nargs="*")

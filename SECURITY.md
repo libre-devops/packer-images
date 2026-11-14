@@ -11,11 +11,12 @@ Every input is pinned and checked before it is used:
 | Input | Pinned in | Checked by |
 |---|---|---|
 | Packer | `versions.yml` | HashiCorp's signature on the release checksums, with the key in `keys/hashicorp.asc` (fingerprint `C874 011F 0AB4 0511 0D02 1055 3436 5D94 72D7 468F`), then the SHA-256 |
+| gitleaks | `versions.yml` | the release's checksums file and GitHub's recorded SHA-256 of the archive, by `just tools` |
 | Packer plugins | each image's `plugins.pkr.hcl` | `packer init`, against the checksums in the plugin's GitHub release |
 | Installer ISO | `image.yml` | SHA-256, by Packer. The pinned hash is copied from the vendor's signed checksums after checking the signature: see [`CONTRIBUTING.md`](./CONTRIBUTING.md). |
 | ansible-lockdown role | `image.yml`, as a tag and commit | `just deps` refuses the tag if it no longer points at the commit |
 | ansible-lockdown audit content | `image.yml`, as a commit | `just deps` fetches that commit only, and refuses one newer than the role release |
-| goss, the audit binary | the lockdown role's defaults | SHA-256, by the role. The lockdown roles download it from `github.com/krameff/goss`, a fork of goss the lockdown team uses, not from `goss-org/goss`. |
+| goss, the audit binary | the lockdown role's defaults | SHA-256, by `just deps`, which downloads it on the build host; the test copies it into the VM, so the VM downloads nothing. The lockdown roles name `github.com/krameff/goss`, a fork of goss the lockdown team uses, not `goss-org/goss`. |
 | Ansible collections | `requirements.yml` | versions from Galaxy |
 | Python tools | `uv.lock` | hashes, by `uv sync --locked` |
 | A role image's base | the base image's own build | SHA-256, by Packer, from the base build's `image.sha256`; the base's build record is copied into the role image's `image.json` |
