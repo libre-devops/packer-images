@@ -61,6 +61,7 @@ jobs:
         env:
           BASE: ${{ inputs.base }}
           TARGET: ${{ inputs.target }}
+          GITHUB_TOKEN: ${{ github.token }}
           PACKER_GITHUB_API_TOKEN: ${{ github.token }}
         run: uvx --from "rust-just==${JUST_VERSION}" just build "$BASE" "$TARGET"
 
@@ -68,8 +69,10 @@ jobs:
         env:
           IMAGE: ${{ inputs.image }}
           TARGET: ${{ inputs.target }}
-          # Packer fetches its plugins from GitHub releases; a token avoids the
-          # unauthenticated rate limit.
+          # `just tools` checks gitleaks against GitHub's recorded digest, and
+          # Packer fetches its plugins from GitHub releases, both through the
+          # API; a token avoids the unauthenticated rate limit.
+          GITHUB_TOKEN: ${{ github.token }}
           PACKER_GITHUB_API_TOKEN: ${{ github.token }}
         run: uvx --from "rust-just==${JUST_VERSION}" just build "$IMAGE" "$TARGET"
 

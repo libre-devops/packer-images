@@ -60,7 +60,11 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
 
-      - name: Install the pinned Packer
+      - name: Install the pinned Packer and gitleaks
+        # gitleaks is checked against GitHub's recorded digest, through the
+        # API; a token avoids the unauthenticated rate limit.
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: uvx --from "rust-just==${JUST_VERSION}" just tools
 
       - name: Lint
