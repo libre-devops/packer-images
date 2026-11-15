@@ -1,0 +1,46 @@
+---
+# GitLab Runner, on the hardened rhel-9 image.
+#
+# A role image: it starts from its base's finished disk, so it keeps the
+# base's hardening and takes its audit content and exceptions, and adds the
+# tools listed here from tools/tools.yml.
+
+name: gitlab-runner-rhel-9
+description: GitLab Runner, on the hardened rhel-9 image
+family: linux
+base: rhel-9
+notes:
+  - >-
+    GitLab Runner is at /usr/local/bin/gitlab-runner, with no account,
+    service, configuration or registration in the image. With the instance
+    executor, a runner manager elsewhere starts VMs from the image through a
+    fleeting plugin, such as GitLab's for Azure virtual machine scale sets,
+    and runs each job on one over SSH as the user its connector_config
+    names; the binary handles the job's artifacts and cache. Keep the manager
+    on the image's GitLab Runner version, which native steps need. The
+    hardening sets sshd's MaxSessions to 4, and the instance executor needs
+    twice capacity_per_instance, so set that to 2 at most.
+  - >-
+    With the shell executor instead, a deployment makes an account and runs
+    the runner on the VM as that account, for example from cloud-init:
+    `gitlab-runner run-single --url <GitLab> --token <glrt-...> --executor
+    shell --max-builds 1` takes one job and exits, as the container images'
+    gitlab-runner does. Jobs run as that account and can read its token, so
+    use one runner per trust boundary.
+  - >-
+    Podman, with the docker command, comes from the base image. Its QEMU target builds on AlmaLinux 9, as rhel-9's does.
+
+tools:
+  - gitlab-runner
+  - git
+  - jq
+  - python
+  - uv
+  - azure-cli
+  - ldo-cli
+  - ansible
+  - tenv
+  - terraform
+  - powershell
+  - libredevopshelpers
+  - podman-compose

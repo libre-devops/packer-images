@@ -21,6 +21,7 @@ that date, to see what will be due for review.
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
 import json
 import os
@@ -51,7 +52,9 @@ LOCKS = ROOT / "tools" / "locks"
 
 # How the tools in the catalogue install, each an Ansible task file in
 # ansible/tools/, and the OS families a package tool must name packages for.
-METHODS = ("package", "archive", "python", "tenv", "directory")
+METHODS = ("package", "archive", "binary", "python", "tenv", "psmodule", "directory")
+# Methods whose download is pinned by its SHA-256 in tools/tools.yml.
+SHA256_METHODS = ("archive", "binary", "psmodule")
 FAMILIES = ("Debian", "RedHat")
 
 # The exception registry's rules. An exception is decided for at most a year
@@ -73,6 +76,10 @@ CONTROL = re.compile(r"\d+(?:\.\d+)+")
 # checksum files must carry a valid signature from it. Published at
 # https://www.hashicorp.com/trust/security.
 HASHICORP_FINGERPRINT = "C874011F0AB405110D02105534365D9472D7468F"
+
+# PowerShell modules come from the PowerShell Gallery's v2 API, which serves
+# each version's package and lists its hash.
+PSGALLERY = "https://www.powershellgallery.com/api/v2"
 
 
 class Failure(Exception):
@@ -533,11 +540,19 @@ def python_interpreter(name: str, catalogue: dict[str, dict]) -> str:
     return ""
 
 
+def psmodule_url(tool: dict) -> str:
+    return f"{PSGALLERY}/package/{tool['module']}/{tool['version']}"
+
+
+def links_pwsh(name: str, catalogue: dict[str, dict]) -> bool:
+    return "pwsh" in ((catalogue.get(name) or {}).get("links") or {})
+
+
 def render_tool(name: str, catalogue: dict[str, dict]) -> dict:
     """One tool as the Ansible tools step and the test take it."""
     tool = catalogue[name]
     out: dict = {"name": name, "method": tool["method"]}
-    for key in ("packages", "files", "extract_to", "commands", "modules", "environment", "configure", "package", "tenv", "path", "group", "members"):
+    for key in ("packages", "files", "extract_to", "links", "command", "commands", "modules", "module", "environment", "configure", "package", "tenv", "path", "group", "members"):
         if key in tool:
             out[key] = tool[key]
     if "expect" in tool:
@@ -546,8 +561,11 @@ def render_tool(name: str, catalogue: dict[str, dict]) -> dict:
         out["check"] = [str(c) for c in tool["check"]] if isinstance(tool["check"], list) else [str(tool["check"])]
     if "version" in tool:
         out["version"] = str(tool["version"])
-    if tool["method"] == "archive":
+    if tool["method"] in ("archive", "binary"):
         out["url"] = fill(tool["url"], tool)
+    if tool["method"] == "psmodule":
+        out["url"] = psmodule_url(tool)
+    if tool["method"] in SHA256_METHODS:
         out["sha256"] = str(tool["sha256"])
     if tool["method"] == "python":
         out["lock"] = str(LOCKS / f"{name}.txt")
@@ -578,25 +596,44 @@ def catalogue_problems(catalogue: dict[str, dict]) -> list[str]:
             packages = tool.get("packages")
             if not isinstance(packages, dict) or not all(isinstance(packages.get(f), list) and packages.get(f) for f in FAMILIES):
                 problems.append(f"{where}: packages must list the packages for each of {', '.join(FAMILIES)}")
-        elif method in ("archive", "python", "tenv") and not version:
+        elif method in ("archive", "binary", "python", "tenv", "psmodule") and not version:
             problems.append(f"{where}: a {method} tool needs a pinned version")
         elif version and not re.search(r"#\s*renovate:[^\n]*\n\s*version:", blocks.get(name, "")):
             problems.append(f"{where}: put a `# renovate:` comment on the line above version, so Renovate bumps it")
 
-        if method == "archive":
-            if "{version}" not in str(tool.get("url", "")):
-                problems.append(f"{where}: url must contain {{version}}")
+        if method in SHA256_METHODS:
             pin = SHA256_PIN.search(blocks.get(name, ""))
             if not pin:
                 problems.append(f"{where}: no sha256 pinned: run `just pin-tools {name}`")
             elif pin.group(2) != version:
                 problems.append(f"{where}: sha256 was pinned for {pin.group(2)}, not {version}: run `just pin-tools {name}`")
+        if method in ("archive", "binary"):
+            if "{version}" not in str(tool.get("url", "")):
+                problems.append(f"{where}: url must contain {{version}}")
+            signed = [key for key in ("signature", "signing_key", "fingerprint") if tool.get(key)]
+            if signed and len(signed) != 3:
+                problems.append(f"{where}: a signed checksums file needs all of signature, signing_key and fingerprint")
+            if signed and not tool.get("checksums"):
+                problems.append(f"{where}: signature is the checksums file's, so name the checksums too")
+            if tool.get("fingerprint") and not re.fullmatch(r"[0-9A-F]{40}", str(tool["fingerprint"])):
+                problems.append(f"{where}: fingerprint must be the signing key's full fingerprint, 40 hex digits in capitals")
+        if method == "archive":
             files = tool.get("files")
             extract_to = tool.get("extract_to")
+            links = tool.get("links")
             if extract_to is not None and not (isinstance(extract_to, str) and extract_to.startswith("/opt/")):
                 problems.append(f"{where}: extract_to must be a directory under /opt")
             if extract_to is None and (not isinstance(files, dict) or not files):
                 problems.append(f"{where}: files must map each command to its path in the archive, or extract_to name where the whole archive goes")
+            if links is not None and (extract_to is None or not isinstance(links, dict) or not links):
+                problems.append(f"{where}: links must map each command to its path under extract_to")
+        if method == "binary" and not re.fullmatch(r"[a-z0-9][a-z0-9._-]*", str(tool.get("command") or "")):
+            problems.append(f"{where}: command must name the binary in /usr/local/bin")
+        if method == "psmodule":
+            if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", str(tool.get("module") or "")):
+                problems.append(f"{where}: no module, the name on the PowerShell Gallery")
+            if not any(links_pwsh(r, catalogue) for r in requires):
+                problems.append(f"{where}: must require the tool that installs PowerShell")
         if method == "python":
             if not tool.get("package"):
                 problems.append(f"{where}: no package, the name on PyPI")
@@ -646,8 +683,16 @@ def catalogue_problems(catalogue: dict[str, dict]) -> list[str]:
     return problems
 
 
+def checksums_text(path: Path) -> str:
+    """A checksums file, in UTF-8 or, as PowerShell's are, UTF-16 with a byte order mark."""
+    data = path.read_bytes()
+    if data.startswith((b"\xff\xfe", b"\xfe\xff")):
+        return data.decode("utf-16")
+    return data.decode("utf-8-sig")
+
+
 def pin_archive(name: str, tool: dict) -> tuple[str, list[str]]:
-    """Download a tool's archive and return its SHA-256 and what it was checked against."""
+    """Download a tool's archive or binary and return its SHA-256 and what it was checked against."""
     url = fill(tool["url"], tool)
     asset = url.rsplit("/", 1)[-1]
     with tempfile.TemporaryDirectory() as tmp:
@@ -656,17 +701,26 @@ def pin_archive(name: str, tool: dict) -> tuple[str, list[str]]:
         digest = hashlib.sha256((work / asset).read_bytes()).hexdigest()
         checked: list[str] = []
         if tool.get("checksums"):
-            download(fill(tool["checksums"], tool), work / "checksums")
+            sums_url = fill(tool["checksums"], tool)
+            download(sums_url, work / "checksums")
+            if tool.get("signature"):
+                download(fill(tool["signature"], tool), work / "checksums.sig")
+                download(str(tool["signing_key"]), work / "signing-key")
+                verify_signature(work / "checksums", work / "checksums.sig", work / "signing-key", str(tool["fingerprint"]))
+            # Listed by its path from the checksums file's directory, which is
+            # just its name when the two sit side by side.
+            folder = sums_url.rsplit("/", 1)[0] + "/"
+            listed_as = url.removeprefix(folder) if url.startswith(folder) else asset
             listed = [
                 line.split()[0]
-                for line in (work / "checksums").read_text(encoding="utf-8").splitlines()
-                if len(line.split()) >= 2 and line.split()[-1].lstrip("*") == asset
+                for line in checksums_text(work / "checksums").splitlines()
+                if len(line.split()) >= 2 and line.split()[-1].lstrip("*").removeprefix("./") == listed_as
             ]
             if not listed:
-                raise Failure(f"{name}: {asset} is not in the vendor's checksums at {fill(tool['checksums'], tool)}")
+                raise Failure(f"{name}: {listed_as} is not in the vendor's checksums at {sums_url}")
             if listed[0].lower() != digest:
                 raise Failure(f"{name}: {asset} has SHA-256 {digest}, but the vendor's checksums say {listed[0]}")
-            checked.append("the vendor's checksums")
+            checked.append("the vendor's signed checksums" if tool.get("signature") else "the vendor's checksums")
     release = GITHUB_RELEASE.match(url)
     if release:
         # GitHub's own SHA-256 of the asset, taken when it was uploaded, and
@@ -689,6 +743,26 @@ def pin_archive(name: str, tool: dict) -> tuple[str, list[str]]:
     if not checked:
         print(f"images.py: warning: {name}: nothing to check {asset} against; pinned to its own SHA-256", file=sys.stderr)
     return digest, checked
+
+
+def pin_psmodule(name: str, tool: dict) -> tuple[str, list[str]]:
+    """Download a PowerShell module's package from the Gallery and return its
+    SHA-256, once its SHA-512 matches the hash the Gallery lists for it."""
+    module, version = str(tool["module"]), str(tool["version"])
+    with tempfile.TemporaryDirectory() as tmp:
+        work = Path(tmp)
+        download(psmodule_url(tool), work / "package.nupkg")
+        data = (work / "package.nupkg").read_bytes()
+        download(f"{PSGALLERY}/Packages(Id='{module}',Version='{version}')", work / "entry.xml")
+        entry = (work / "entry.xml").read_text(encoding="utf-8")
+    listed = re.search(r"<d:PackageHash>([^<]+)</d:PackageHash>", entry)
+    algorithm = re.search(r"<d:PackageHashAlgorithm>([^<]+)</d:PackageHashAlgorithm>", entry)
+    if not listed or not algorithm or algorithm.group(1).upper() != "SHA512":
+        raise Failure(f"{name}: the PowerShell Gallery lists no SHA-512 for {module} {version}")
+    got = base64.b64encode(hashlib.sha512(data).digest()).decode()
+    if got != listed.group(1):
+        raise Failure(f"{name}: {module} {version} has SHA-512 {got}, but the PowerShell Gallery lists {listed.group(1)}")
+    return hashlib.sha256(data).hexdigest(), ["the PowerShell Gallery's hash"]
 
 
 def pin_python(name: str, tool: dict, catalogue: dict[str, dict]) -> None:
@@ -821,16 +895,23 @@ def github_api(path: str) -> dict:
         return json.loads((Path(tmp) / "response.json").read_text(encoding="utf-8"))
 
 
-def verify_hashicorp_signature(sums: Path, signature: Path) -> None:
-    """Check the checksums file is signed by HashiCorp's release key."""
+def verify_signature(signed: Path, signature: Path, key: Path, fingerprint: str) -> None:
+    """Check a file carries a valid signature from the key with this
+    fingerprint. The key file is only where the key comes from: a key with
+    any other fingerprint in it proves nothing."""
     with tempfile.TemporaryDirectory() as home:
         gpg = ["gpg", "--batch", "--no-tty", "--homedir", home]
-        subprocess.run([*gpg, "--quiet", "--import", str(ROOT / "keys" / "hashicorp.asc")], check=True, capture_output=True)
-        result = subprocess.run([*gpg, "--status-fd", "1", "--verify", str(signature), str(sums)], capture_output=True, text=True)
+        subprocess.run([*gpg, "--quiet", "--import", str(key)], check=True, capture_output=True)
+        result = subprocess.run([*gpg, "--status-fd", "1", "--verify", str(signature), str(signed)], capture_output=True, text=True)
     # VALIDSIG <signing subkey> ... <primary key fingerprint>
     primaries = [line.split()[-1] for line in result.stdout.splitlines() if line.startswith("[GNUPG:] VALIDSIG ")]
-    if result.returncode != 0 or HASHICORP_FINGERPRINT not in primaries:
-        raise Failure(f"{sums.name}: no valid signature from HashiCorp's key {HASHICORP_FINGERPRINT}\n{result.stderr}")
+    if result.returncode != 0 or fingerprint not in primaries:
+        raise Failure(f"{signed.name}: no valid signature from the key {fingerprint}\n{result.stderr}")
+
+
+def verify_hashicorp_signature(sums: Path, signature: Path) -> None:
+    """Check the checksums file is signed by HashiCorp's release key."""
+    verify_signature(sums, signature, ROOT / "keys" / "hashicorp.asc", HASHICORP_FINGERPRINT)
 
 
 def cmd_tools(args: argparse.Namespace) -> None:
@@ -1001,7 +1082,7 @@ def python_lock_current(name: str, tool: dict) -> bool:
 
 
 def cmd_pin_tools(args: argparse.Namespace) -> None:
-    """Pin each archive tool's SHA-256 and each python tool's hash-locked requirements.
+    """Pin each download's SHA-256 (archive, binary and psmodule tools) and each python tool's hash-locked requirements.
 
     Only pins that are missing or were made for another version, unless
     --force: a pin changes when its version does, and not otherwise.
@@ -1013,7 +1094,7 @@ def cmd_pin_tools(args: argparse.Namespace) -> None:
     text = CATALOGUE.read_text(encoding="utf-8")
     for name in args.tools or list(catalogue):
         tool = catalogue[name]
-        if tool.get("method") == "archive" and not args.force:
+        if tool.get("method") in SHA256_METHODS and not args.force:
             pin = SHA256_PIN.search(tool_blocks(text)[name])
             if pin and pin.group(2) == str(tool.get("version")):
                 print(f"{name}: {tool['version']} already pinned", file=sys.stderr)
@@ -1021,8 +1102,8 @@ def cmd_pin_tools(args: argparse.Namespace) -> None:
         if tool.get("method") == "python" and not args.force and python_lock_current(name, tool):
             print(f"{name}: {tool['version']} already locked", file=sys.stderr)
             continue
-        if tool.get("method") == "archive":
-            digest, checked = pin_archive(name, tool)
+        if tool.get("method") in SHA256_METHODS:
+            digest, checked = pin_psmodule(name, tool) if tool["method"] == "psmodule" else pin_archive(name, tool)
             block = tool_blocks(text)[name]
             line = f'    sha256: "{digest}"  # {tool["version"]}'
             updated, count = re.subn(r"^    sha256:.*$", lambda _: line, block, count=1, flags=re.MULTILINE)
@@ -1445,6 +1526,8 @@ def tools_section(image: Image, when: str) -> list[str]:
     how = {
         "package": "the base image's signed packages, patched at every build",
         "archive": "release archive, SHA-256 pinned",
+        "binary": "release binary, SHA-256 pinned",
+        "psmodule": "PowerShell Gallery package, SHA-256 pinned",
         "python": "own Python environment, hash-locked requirements",
         "tenv": "through tenv, HashiCorp's signature checked",
         "directory": "a directory the image makes, owned by root and a group",

@@ -73,9 +73,11 @@ Renovate cannot bump ISOs, so do it by hand when a point release comes out:
 
 1. If the tool is not in `tools/tools.yml`, add it under `tools`, picking the method that fits:
    - `package` when the base images' own repositories have it, with the package names for `Debian` and `RedHat`. This is the first choice: the OS vendor signs and patches it.
-   - `archive` for a release archive: `url` and, where the vendor publishes them, `checksums`, both with `{version}`, and `files`, each command and its path in the archive. Leave `sha256` empty.
+   - `archive` for a release archive: `url` and, where the vendor publishes them, `checksums`, both with `{version}`, and `files`, each command and its path in the archive. For a program that must run from its own folder, `extract_to`, a folder under `/opt`, and `links`, each command and its path in that folder. Leave `sha256` empty. Where the vendor signs its checksums, add `signature` (with `{version}`), `signing_key`, where the key is published, and `fingerprint`, the key's full fingerprint, which is what the pin trusts.
+   - `binary` for a single release binary: `url`, `checksums` and, if signed, the signature fields as for `archive`, and `command`, its name in `/usr/local/bin`.
    - `python` for a PyPI application: `package`, `requires: [python, uv]`, and its `commands`, or `modules` for one whose script would pick up any Python on PATH.
    - `tenv` for a Terraform or OpenTofu version, with `requires: [tenv]`.
+   - `psmodule` for a PowerShell module: `module`, its name on the PowerShell Gallery, and `requires: [powershell]`, with a `# renovate: datasource=nuget depName=<module> registryUrl=https://www.powershellgallery.com/api/v2/` comment. A module that needs other modules needs each of them as a `psmodule` too, listed under `requires`.
    - `directory` for a directory a group shares, with `path` under `/opt`, `group`, the `members` allowed to write by account name, and `requires: [acl]`.
 
    Each method's tasks retry their network operations, so a new method must as well (`until`, `retries`, `delay`).

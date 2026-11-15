@@ -1,0 +1,24 @@
+---
+# Method `binary`: a single release binary, refused unless it matches the
+# SHA-256 pinned in the catalogue, installed as `command` in /usr/local/bin.
+- name: "Download {{ tool.name }} {{ tool.version }}"
+  ansible.builtin.get_url:
+    url: "{{ tool.url }}"
+    dest: "{{ tools_downloads }}/{{ tool.name }}.binary"
+    checksum: "sha256:{{ tool.sha256 }}"
+    owner: root
+    group: root
+    mode: "0600"
+  register: tools_download
+  until: tools_download is succeeded
+  retries: 5
+  delay: 30
+
+- name: "Install {{ tool.name }} as {{ tools_bin }}/{{ tool.command }}"
+  ansible.builtin.copy:
+    src: "{{ tools_downloads }}/{{ tool.name }}.binary"
+    dest: "{{ tools_bin }}/{{ tool.command }}"
+    remote_src: true
+    owner: root
+    group: root
+    mode: "0755"

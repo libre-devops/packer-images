@@ -21,9 +21,10 @@ Every input is pinned and checked before it is used:
 | Python tools | `uv.lock` | hashes, by `uv sync --locked` |
 | A role image's base | the base image's own build | SHA-256, by Packer, from the base build's `image.sha256`; the base's build record is copied into the role image's `image.json` |
 | Tools from distribution packages (`package`) | not by version | the base image's package manager, against the distribution's signing keys; upgraded at every build |
-| Tools from release archives (`archive`) | `tools/tools.yml`, version and SHA-256 | SHA-256, by Ansible, before unpacking. `just pin-tools` takes the hash from the downloaded archive and refuses it unless the vendor's published checksums agree |
+| Tools from release archives and binaries (`archive`, `binary`) | `tools/tools.yml`, version and SHA-256 | SHA-256, by Ansible, before unpacking or installing. `just pin-tools` takes the hash from the download and refuses it unless the vendor's published checksums agree, and GitHub's recorded SHA-256 for a GitHub release asset. Where the vendor signs its checksums, as GitLab does for GitLab Runner, `just pin-tools` also refuses them unless the signature is from the key whose fingerprint the catalogue pins (GitLab's `931D A69C FA3A FEBB C97D AA8C 6C57 C29C 6BA7 5A4E`). The key itself is fetched from the vendor when pinning, since GitLab extends its expiry in place |
 | Python tools in images (`python`) | `tools/tools.yml` and `tools/locks/` | every package's hash, by `uv pip install --require-hashes`, wheels only, nothing resolved at build time |
 | Terraform through tenv (`tenv`) | `tools/tools.yml` | tenv checks the SHA-256 and HashiCorp's signature on the checksums, with the key from `keys/hashicorp.asc` rather than one fetched at install time |
+| PowerShell modules (`psmodule`) | `tools/tools.yml`, version and SHA-256 | SHA-256 of the Gallery package, by Ansible, before PSResourceGet installs it from a local repository of that file alone. `just pin-tools` refuses the package unless its SHA-512 matches the hash the PowerShell Gallery lists for it. Modules are not signature-checked: PSResourceGet checks Authenticode signatures only on Windows |
 
 ## The build account
 

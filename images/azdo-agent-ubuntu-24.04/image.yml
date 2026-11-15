@@ -20,14 +20,17 @@ notes:
     docker command, comes from the base image.
 
 tools:
-  - runner-libraries
+  - dotnet-libraries
   - hosted-toolcache
   - git
   - jq
   - python
   - uv
   - azure-cli
+  - ldo-cli
   - ansible
   - tenv
   - terraform
+  - powershell
+  - libredevopshelpers
   - podman-compose

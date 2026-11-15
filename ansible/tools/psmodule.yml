@@ -1,0 +1,66 @@
+---
+# Method `psmodule`: a PowerShell module for every user, from its package on
+# the PowerShell Gallery, refused unless it matches the SHA-256 pinned in the
+# catalogue. PSResourceGet, which ships with PowerShell, installs it from a
+# repository of that one checked file, so nothing is resolved at build time:
+# a module that needs others fails until they are in the catalogue too.
+- name: "Create the repository to install {{ tool.name }} from"
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+  loop:
+    - "{{ tools_downloads }}/{{ tool.name }}"
+    - "{{ tools_downloads }}/{{ tool.name }}-home"
+
+- name: "Download {{ tool.module }} {{ tool.version }}"
+  ansible.builtin.get_url:
+    url: "{{ tool.url }}"
+    # The name a file repository expects.
+    dest: "{{ tools_downloads }}/{{ tool.name }}/{{ tool.module }}.{{ tool.version }}.nupkg"
+    checksum: "sha256:{{ tool.sha256 }}"
+    owner: root
+    group: root
+    mode: "0600"
+  register: tools_download
+  until: tools_download is succeeded
+  retries: 5
+  delay: 30
+
+# AllUsers puts it in /usr/local/share/powershell/Modules. HOME points at the
+# downloads, which are removed, so PSResourceGet's repository list and caches
+# leave nothing in root's home.
+- name: "Install {{ tool.module }} {{ tool.version }} for every user"
+  ansible.builtin.command:
+    argv:
+      - "{{ tools_bin }}/pwsh"
+      - -NoLogo
+      - -NoProfile
+      - -NonInteractive
+      - -Command
+      - >-
+        $ErrorActionPreference = 'Stop';
+        Register-PSResourceRepository -Name image-tools -Uri $env:TOOL_REPOSITORY -Trusted;
+        Install-PSResource -Name $env:TOOL_MODULE -Version "[$env:TOOL_VERSION]" -Repository image-tools
+        -Scope AllUsers -TrustRepository -AcceptLicense -Quiet
+    creates: "/usr/local/share/powershell/Modules/{{ tool.module }}/{{ tool.version }}"
+  environment: "{{ tools_environment | combine({
+    'HOME': tools_downloads ~ '/' ~ tool.name ~ '-home',
+    'XDG_CACHE_HOME': tools_downloads ~ '/' ~ tool.name ~ '-home/.cache',
+    'XDG_DATA_HOME': tools_downloads ~ '/' ~ tool.name ~ '-home/.local/share',
+    'XDG_CONFIG_HOME': tools_downloads ~ '/' ~ tool.name ~ '-home/.config',
+    'TOOL_REPOSITORY': tools_downloads ~ '/' ~ tool.name,
+    'TOOL_MODULE': tool.module,
+    'TOOL_VERSION': tool.version }) }}"
+
+# The hardened umask is 027, so what PSResourceGet writes is not readable by
+# the users who import the module.
+- name: "Make readable by every user {{ tool.name }}"
+  ansible.builtin.file:
+    path: /usr/local/share/powershell
+    owner: root
+    group: root
+    mode: u=rwX,go=rX
+    recurse: true

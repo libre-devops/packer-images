@@ -32,7 +32,10 @@ tools:
   - python
   - uv
   - azure-cli
+  - ldo-cli
   - ansible
   - tenv
   - terraform
+  - powershell
+  - libredevopshelpers
   - podman-compose

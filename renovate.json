@@ -34,7 +34,7 @@
         "/^tools/tools\\.yml$/"
       ],
       "matchStrings": [
-        "#\\s*renovate:\\s*datasource=(?<datasource>\\S+)\\s+depName=(?<depName>\\S+)(?:\\s+extractVersion=(?<extractVersion>\\S+))?\\s*\\n\\s*[\\w-]+:\\s*\"?(?<currentValue>[^\\s\"]+)\"?"
+        "#\\s*renovate:\\s*datasource=(?<datasource>\\S+)\\s+depName=(?<depName>\\S+)(?:\\s+registryUrl=(?<registryUrl>\\S+))?(?:\\s+extractVersion=(?<extractVersion>\\S+))?\\s*\\n\\s*[\\w-]+:\\s*\"?(?<currentValue>[^\\s\"]+)\"?"
       ]
     },
     {
@@ -83,6 +83,13 @@
         "tools/tools.yml"
       ],
       "groupName": "image tools"
+    },
+    {
+      "description": "Stay on the PowerShell 7.6 LTS line; move to the next LTS by hand",
+      "matchPackageNames": [
+        "PowerShell/PowerShell"
+      ],
+      "allowedVersions": "/^7\\.6\\./"
     },
     {
       "description": "Ansible collections together; every image pipeline runs on them",

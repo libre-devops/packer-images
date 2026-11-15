@@ -4,21 +4,29 @@
 # require with them.
 #
 # Renovate bumps the lines marked `renovate:`. Then run `just pin-tools` on its
-# branch, which writes each archive's SHA-256 here and each Python tool's
-# hash-locked requirements to tools/locks/. A build installs nothing that does
-# not match its pin.
+# branch, which writes each download's SHA-256 here, once it matches what the
+# vendor publishes (checksums, their signature where the vendor signs them,
+# GitHub's digest, the PowerShell Gallery's hash), and each Python tool's
+# hash-locked requirements to tools/locks/. A build installs nothing that
+# does not match its pin.
 #
 # Every tool has a method, an Ansible task file in ansible/tools/:
 #   package   packages from the base image's own signed repositories (on
 #             Debian without recommends, so list what the tool needs), upgraded
 #             at every build, so the OS vendor patches them
 #   archive   a release archive, checked against its pinned SHA-256; the
-#             binaries named in `files` go to /usr/local/bin
+#             binaries named in `files` go to /usr/local/bin, or with
+#             `extract_to` the whole archive goes under /opt and `links`
+#             link commands from it into /usr/local/bin
+#   binary    a single release binary, checked against its pinned SHA-256,
+#             installed as `command` in /usr/local/bin
 #   python    a Python application in its own virtual environment under /opt,
 #             installed by uv from hash-locked requirements, with no pip in it;
 #             `commands` go to /usr/local/bin
 #   tenv      a Terraform version installed through tenv, which checks
 #             HashiCorp's signature with the key pinned in keys/hashicorp.asc
+#   psmodule  a PowerShell module from the PowerShell Gallery, checked against
+#             its pinned SHA-256, installed for every user
 #   directory a directory a group shares, such as the tool cache, owned by
 #             root and the group, which members alone can write to
 #
@@ -27,15 +35,15 @@
 # Azure DevOps scale set agents read.
 
 tools:
-  # What the Azure Pipelines agent and the GitHub Actions runner need at run
-  # time: both are .NET applications. Azure DevOps installs its agent itself
-  # when it adds a VM to the pool, so the image does not.
-  runner-libraries:
+  # What .NET applications need at run time: the Azure Pipelines agent, the
+  # GitHub Actions runner and PowerShell. Azure DevOps installs its agent
+  # itself when it adds a VM to the pool, so the image does not.
+  dotnet-libraries:
     method: package
-    description: Libraries the Azure Pipelines agent and the GitHub Actions runner need (ICU, Kerberos, zlib)
+    description: Libraries .NET applications need (ICU, Kerberos, OpenSSL, zlib), for the CI agents and PowerShell
     packages:
-      Debian: [libicu74, libkrb5-3, zlib1g]
-      RedHat: [libicu, krb5-libs, zlib]
+      Debian: [libicu74, libkrb5-3, libssl3t64, zlib1g]
+      RedHat: [libicu, krb5-libs, openssl-libs, zlib]
 
   # Rootless: CI agents run as an unprivileged user. Its overlay storage
   # driver needs the overlay module, which the golden images keep loadable
@@ -88,7 +96,7 @@ tools:
   actions-runner:
     method: archive
     description: GitHub Actions runner, at /opt/actions-runner
-    requires: [runner-libraries, git]
+    requires: [dotnet-libraries, git]
     # renovate: datasource=github-releases depName=actions/runner extractVersion=^v(?<version>.+)$
     version: 2.338.2
     url: https://github.com/actions/runner/releases/download/v{version}/actions-runner-linux-x64-{version}.tar.gz
@@ -100,6 +108,29 @@ tools:
     check: >-
       sh -c 'cp -r /opt/actions-runner "$HOME/actions-runner" &&
       "$HOME/actions-runner/bin/Runner.Listener" --version'
+
+  # GitLab Runner, which these images never run or register themselves. With
+  # the instance executor, a runner manager elsewhere starts VMs from the
+  # image and runs each job on one over SSH, and this binary handles the
+  # job's artifacts and cache; it must match the manager's version for native
+  # steps. With the shell executor, a deployment runs it on the VM (see the
+  # gitlab-runner images' notes). GitLab signs each release's checksums.
+  gitlab-runner:
+    method: binary
+    description: GitLab Runner, for the instance executor's job VMs or the shell executor
+    requires: [git]
+    # renovate: datasource=gitlab-releases depName=gitlab-org/gitlab-runner extractVersion=^v(?<version>.+)$
+    version: 19.5.3
+    url: https://gitlab-runner-downloads.s3.amazonaws.com/v{version}/binaries/gitlab-runner-linux-amd64
+    checksums: https://gitlab-runner-downloads.s3.amazonaws.com/v{version}/release.sha256
+    signature: https://gitlab-runner-downloads.s3.amazonaws.com/v{version}/release.sha256.asc
+    # GitLab's package signing key. GitLab extends its expiry in place, so
+    # it is fetched when pinning and trusted only by this fingerprint.
+    signing_key: https://packages.gitlab.com/runner/gitlab-runner/gpgkey/runner-gitlab-runner-49F16C5CC3A0F81F.pub.gpg
+    fingerprint: 931DA69CFA3AFEBBC97DAA8C6C57C29C6BA75A4E
+    sha256: "cd586a217b0ba4d339b3f3d645b84f8f5e1cc711e73148c30a3eec0f8c78378b"  # 19.5.3
+    command: gitlab-runner
+    check: gitlab-runner --version
 
   acl:
     method: package
@@ -244,6 +275,50 @@ tools:
       TENV_AUTO_INSTALL: "false"
       TFENV_HASHICORP_PGP_KEY: /usr/local/share/keyrings/hashicorp.asc
     check: tenv --version
+
+  # PowerShell 7, the LTS line: Renovate stays on 7.6 (renovate.json), and
+  # moving to the next LTS is done by hand. From Microsoft's release archive
+  # rather than its apt and dnf repositories, so the version is the pinned
+  # one on both families. pwsh runs from its own folder, beside the rest of
+  # .NET, so it is linked rather than copied.
+  powershell:
+    method: archive
+    description: PowerShell 7 (LTS)
+    requires: [dotnet-libraries]
+    # renovate: datasource=github-releases depName=PowerShell/PowerShell extractVersion=^v(?<version>.+)$
+    version: 7.6.10
+    url: https://github.com/PowerShell/PowerShell/releases/download/v{version}/powershell-{version}-linux-x64.tar.gz
+    checksums: https://github.com/PowerShell/PowerShell/releases/download/v{version}/hashes.sha256
+    sha256: "e261cabc91c78a9afe8d1e5f24731ab0d38204735ab2ec94b0af55102652e10d"  # 7.6.10
+    extract_to: /opt/microsoft/powershell/7
+    links:
+      pwsh: pwsh
+    environment:
+      POWERSHELL_TELEMETRY_OPTOUT: "1"
+      POWERSHELL_UPDATECHECK: "Off"
+    check: pwsh -NoLogo -NoProfile -Command '$PSVersionTable.PSVersion.ToString()'
+
+  # Libre DevOps' PowerShell helpers, for every user.
+  libredevopshelpers:
+    method: psmodule
+    description: LibreDevOpsHelpers, the Libre DevOps PowerShell module
+    requires: [powershell]
+    module: LibreDevOpsHelpers
+    # renovate: datasource=nuget depName=LibreDevOpsHelpers registryUrl=https://www.powershellgallery.com/api/v2/
+    version: 3.0.1
+    sha256: "0320cd7f508a6b9ca56cc3c6eb59e830586cfa3e640a327c55745d04dc2def78"  # 3.0.1
+    check: pwsh -NoLogo -NoProfile -Command 'Import-Module LibreDevOpsHelpers; (Get-Module LibreDevOpsHelpers).Version.ToString()'
+
+  # ldo, Libre DevOps' Python helpers CLI, published as libre-devops-helpers.
+  ldo-cli:
+    method: python
+    description: ldo, the Libre DevOps helpers CLI (libre-devops-helpers)
+    requires: [python, uv]
+    package: libre-devops-helpers
+    # renovate: datasource=pypi depName=libre-devops-helpers
+    version: 0.8.1
+    commands: [ldo]
+    check: ldo --version
 
   terraform:
     method: tenv

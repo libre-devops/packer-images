@@ -2,7 +2,8 @@
 # Method `archive`: a release archive, refused unless it matches the SHA-256
 # pinned in the catalogue. Either only the binaries named in `files` are kept,
 # in /usr/local/bin, or with `extract_to` the whole archive goes to that
-# directory, owned by root and readable by every user.
+# directory, owned by root and readable by every user, and `links` links
+# commands from it into /usr/local/bin.
 - name: "Download {{ tool.name }} {{ tool.version }}"
   ansible.builtin.get_url:
     url: "{{ tool.url }}"
@@ -55,5 +56,27 @@
         group: root
         mode: "0755"
       loop: "{{ (tool.files | default({})) | dict2items }}"
+      loop_control:
+        label: "{{ tools_bin }}/{{ item.key }}"
+
+    # For a program that must run from its own folder, such as pwsh, which
+    # finds the rest of .NET beside it. Vendors' archives do not always mark
+    # it executable.
+    - name: "Make executable the commands from {{ tool.name }}"
+      ansible.builtin.file:
+        path: "{{ tools_unpack }}/{{ item.value }}"
+        owner: root
+        group: root
+        mode: "0755"
+      loop: "{{ (tool.links | default({})) | dict2items }}"
+      loop_control:
+        label: "{{ tools_unpack }}/{{ item.value }}"
+
+    - name: "Link the commands into {{ tools_bin }} for {{ tool.name }}"
+      ansible.builtin.file:
+        src: "{{ tools_unpack }}/{{ item.value }}"
+        dest: "{{ tools_bin }}/{{ item.key }}"
+        state: link
+      loop: "{{ (tool.links | default({})) | dict2items }}"
       loop_control:
         label: "{{ tools_bin }}/{{ item.key }}"

@@ -21,14 +21,17 @@ notes:
     AlmaLinux 9, as rhel-9's does.
 
 tools:
-  - runner-libraries
+  - dotnet-libraries
   - hosted-toolcache
   - git
   - jq
   - python
   - uv
   - azure-cli
+  - ldo-cli
   - ansible
   - tenv
   - terraform
+  - powershell
+  - libredevopshelpers
   - podman-compose
