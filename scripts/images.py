@@ -643,13 +643,22 @@ def catalogue_problems(catalogue: dict[str, dict]) -> list[str]:
                 problems.append(f"{where}: a python tool installs with uv, so it must require uv")
             if not re.search(r"python(\d+\.\d+)$", python_interpreter(name, catalogue)):
                 problems.append(f"{where}: must require a package tool that names its interpreter, such as python")
+            extra = tool.get("with")
+            if extra is not None and (
+                not isinstance(extra, dict) or not extra or not all(re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", str(p)) and v for p, v in extra.items())
+            ):
+                problems.append(f"{where}: with must map each package to install alongside it, its name on PyPI, to a version")
+            for package in extra if isinstance(extra, dict) else {}:
+                if not re.search(rf"#\s*renovate:[^\n]*\n\s*{re.escape(str(package))}:", blocks.get(name, "")):
+                    problems.append(f"{where}: put a `# renovate:` comment on the line above {package} in with, so Renovate bumps it")
             lock = LOCKS / f"{name}.txt"
             if not lock.is_file():
                 problems.append(f"{where}: no {lock.relative_to(ROOT)}: run `just pin-tools {name}`")
-            elif tool.get("package") and not re.search(
-                rf"^{re.escape(str(tool['package']))}=={re.escape(version)}\b", lock.read_text(encoding="utf-8"), re.MULTILINE | re.IGNORECASE
-            ):
-                problems.append(f"{where}: {lock.relative_to(ROOT)} is not for {tool['package']} {version}: run `just pin-tools {name}`")
+            elif tool.get("package") and not python_lock_current(name, tool):
+                pinned = ", ".join(f"{p} {v}" for p, v in python_requirements(tool).items())
+                problems.append(f"{where}: {lock.relative_to(ROOT)} is not for {pinned}: run `just pin-tools {name}`")
+        elif "with" in tool:
+            problems.append(f"{where}: only a python tool installs packages with it")
         if method == "tenv":
             if not any("tenv" in ((catalogue.get(r) or {}).get("files") or {}) for r in requires):
                 problems.append(f"{where}: must require the tool that installs tenv")
@@ -781,9 +790,10 @@ def pin_python(name: str, tool: dict, catalogue: dict[str, dict]) -> None:
         [uv, "pip", "compile", "-", "--no-config", "--quiet", "--generate-hashes", "--only-binary", ":all:",
          "--python-version", python.group(1), "--python-platform", "x86_64-manylinux_2_34",
          "--custom-compile-command", f"just pin-tools {name}", "--output-file", str(lock)],
-        input=f"{tool['package']}=={tool['version']}\n", text=True, check=True, capture_output=True,
+        input="".join(f"{p}=={v}\n" for p, v in python_requirements(tool).items()), text=True, check=True, capture_output=True,
     )
-    print(f"{name}: locked {tool['package']} {tool['version']} for Python {python.group(1)} in {lock.relative_to(ROOT)}", file=sys.stderr)
+    pinned = ", ".join(f"{p} {v}" for p, v in python_requirements(tool).items())
+    print(f"{name}: locked {pinned} for Python {python.group(1)} in {lock.relative_to(ROOT)}", file=sys.stderr)
 
 
 # Commands
@@ -1074,10 +1084,21 @@ def cmd_pin_audit(args: argparse.Namespace) -> None:
         print(f"{name}: pinned {image.audit_name} to {commit[:12]} ({date}), to match {image.role_name} {image.role['version']}", file=sys.stderr)
 
 
+def python_requirements(tool: dict) -> dict[str, str]:
+    """A python tool's package and the packages `with` installs alongside it, in one environment, each at its pinned version."""
+    extra = tool.get("with")
+    return {str(tool.get("package")): str(tool.get("version"))} | ({str(p): str(v) for p, v in extra.items()} if isinstance(extra, dict) else {})
+
+
 def python_lock_current(name: str, tool: dict) -> bool:
+    """The lock pins every package the tool names, each at its version."""
     lock = LOCKS / f"{name}.txt"
-    return lock.is_file() and bool(
-        re.search(rf"^{re.escape(str(tool.get('package')))}=={re.escape(str(tool.get('version')))}\b", lock.read_text(encoding="utf-8"), re.MULTILINE | re.IGNORECASE)
+    if not lock.is_file():
+        return False
+    text = lock.read_text(encoding="utf-8")
+    return all(
+        re.search(rf"^{re.escape(package)}=={re.escape(version)}\b", text, re.MULTILINE | re.IGNORECASE)
+        for package, version in python_requirements(tool).items()
     )
 
 
@@ -1543,6 +1564,8 @@ def tools_section(image: Image, when: str) -> list[str]:
     for name in image_tools(image, catalogue):
         tool = catalogue[name]
         version = f"`{tool['version']}`" if "version" in tool else "the distribution's" if tool["method"] == "package" else "none"
+        if isinstance(tool.get("with"), dict):
+            version += ", with " + " and ".join(f"{p} `{v}`" for p, v in tool["with"].items())
         lines.append(f"| `{name}` | {version} | {how[tool['method']]} | {cell(tool.get('description'))} |")
     return lines
 

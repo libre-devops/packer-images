@@ -28,7 +28,7 @@ From the catalogue in [`tools/tools.yml`](../../tools/tools.yml). Installed afte
 | `uv` | `0.13.7` | release archive, SHA-256 pinned | uv, the Python package and project manager |
 | `azure-cli` | `2.92.0` | own Python environment, hash-locked requirements | Azure CLI |
 | `ldo-cli` | `0.8.1` | own Python environment, hash-locked requirements | ldo, the Libre DevOps helpers CLI (libre-devops-helpers) |
-| `ansible` | `14.6.0` | own Python environment, hash-locked requirements | Ansible, with the community collections |
+| `ansible` | `14.6.0`, with molecule `26.11.0` and molecule-plugins `26.11.0` | own Python environment, hash-locked requirements | Ansible, with the community collections, and Molecule with its podman driver |
 | `tenv` | `4.15.1` | release archive, SHA-256 pinned | tenv, the Terraform and OpenTofu version manager |
 | `terraform` | `1.17.1` | through tenv, HashiCorp's signature checked | Terraform, the default version for tenv |
 | `powershell` | `7.6.10` | release archive, SHA-256 pinned | PowerShell 7 (LTS) |

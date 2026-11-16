@@ -22,6 +22,7 @@
 #             installed as `command` in /usr/local/bin
 #   python    a Python application in its own virtual environment under /opt,
 #             installed by uv from hash-locked requirements, with no pip in it;
+#             `with` adds packages to the same environment, each pinned, and
 #             `commands` go to /usr/local/bin
 #   tenv      a Terraform version installed through tenv, which checks
 #             HashiCorp's signature with the key pinned in keys/hashicorp.asc
@@ -232,11 +233,18 @@ tools:
 
   ansible:
     method: python
-    description: Ansible, with the community collections
+    description: Ansible, with the community collections, and Molecule with its podman driver
     requires: [python, uv]
     package: ansible
     # renovate: datasource=pypi depName=ansible
     version: 14.6.0
+    # In Ansible's own environment, so Molecule runs this ansible-core and
+    # these collections (containers.podman for the podman driver).
+    with:
+      # renovate: datasource=pypi depName=molecule
+      molecule: 26.11.0
+      # renovate: datasource=pypi depName=molecule-plugins
+      molecule-plugins: 26.11.0
     commands:
       - ansible
       - ansible-community
@@ -249,7 +257,14 @@ tools:
       - ansible-pull
       - ansible-test
       - ansible-vault
-    check: ansible-community --version
+      - molecule
+    # Making a scenario runs a playbook on localhost, so it proves Molecule
+    # and Ansible both work for an ordinary user, without the network.
+    check:
+      - ansible-community --version
+      - molecule drivers
+      - sh -c 'cd "$(mktemp -d)" && molecule init scenario && test -s molecule/default/molecule.yml'
+    expect: podman
 
   tenv:
     method: archive
