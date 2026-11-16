@@ -201,13 +201,47 @@ images/<image>/
   README.md            written by `just docs`
 exceptions.yml         the CIS exception registry
 tools/                 tools.yml, the tool catalogue, and locks/, the Python tools' hash-locked requirements
-docs/                  longer notes and plans, such as building rhel-9 from RHEL
+docs/                  longer notes and plans, such as building rhel-9 from RHEL, and diagrams/, the CI/CD diagram for draw.io
 ansible/               base, tools, harden, generalise and verify playbooks; tools/ holds a task file per tool method
 scripts/               images.py (pins, rendering, validation, gate), build, test and validate scripts
 keys/                  HashiCorp's release signing key, which `just tools` checks Packer with
 versions.yml           pinned tools
 requirements.yml       pinned Ansible collections
 ```
+
+## CI/CD
+
+Everything runs on GitHub Actions, and every step is the `just` recipe a local run uses. [CI](./.github/workflows/ci.yml) scans every commit for secrets, lints, and validates every image definition, hardening profile, exception and Packer template, on each pull request and push to `main`. Each image has its own pipeline (see [Images](#images)), which runs on a change to anything the image is built from, every Sunday for security updates, and by hand: it builds the image, with its golden base first for a role image, boots it as a new VM, checks it, audits it and runs the gate. Renovate's pull requests get their pins from the Pins workflow first (see [Pins and updates](#pins-and-updates)). A pull request is squash-merged once every check passes, and the images build again on `main`. No image is published yet.
+
+```mermaid
+flowchart TB
+  renovate["Renovate, Saturdays: releases at least 7 days old"] -- "opens a pull request" --> pins["Pins: just repin on its branch, one commit GitHub signs"]
+  pins -- "starts the checks" --> pr["Pull request to main"]
+  branch["Your change, on a branch"] --> pr
+  weekly["Sundays and by hand: every image, for security updates"]
+  subgraph ci["CI, pull requests and main"]
+    direction LR
+    secrets["Secret scan: gitleaks, every commit"]
+    lint["Lint: yamllint, ansible-lint, shellcheck, packer fmt, zizmor"] --> validate["Validate: images, profiles, exceptions, READMEs, Packer templates"]
+  end
+  subgraph image["A pipeline per image"]
+    direction LR
+    golden["Golden image: pinned ISO, patched, hardened with ansible-lockdown"] --> role["Role image, if any: the golden disk and pinned tools"]
+    role --> boot["Boot as a new VM: first boot, nothing left of the build, tools as a user"]
+    boot --> audit["CIS audit: the lockdown role's pinned audit content"] --> gate{"Every failure in exceptions.yml?"}
+  end
+  pr --> ci
+  pr -- "a change to what it is built from" --> image
+  weekly --> image
+  ci --> checks{"Every check passes?"}
+  image --> checks
+  image --> report["Build record and audit report, kept 90 days"]
+  checks -- "no" --> fix["Fix it on the branch and push: the checks run again"]
+  checks -- "yes" --> merge["Squash merge to main: the images build again"]
+  merge -.-> publish["Planned: publish to Azure Compute Gallery, then AWS"]
+```
+
+The same flow, with icons, is in [`docs/diagrams/cicd.drawio`](./docs/diagrams/cicd.drawio), which [draw.io](https://www.drawio.com) opens and edits.
 
 ## Pins and updates
 
