@@ -207,10 +207,10 @@ tools:
     method: archive
     description: uv, the Python package and project manager
     # renovate: datasource=github-releases depName=astral-sh/uv
-    version: 0.13.7
+    version: 0.13.8
     url: https://github.com/astral-sh/uv/releases/download/{version}/uv-x86_64-unknown-linux-gnu.tar.gz
     checksums: https://github.com/astral-sh/uv/releases/download/{version}/uv-x86_64-unknown-linux-gnu.tar.gz.sha256
-    sha256: "c5221ff41b7892bfc223543883600125f6a47fe845093e0f5bdff4f359196d83"  # 0.13.7
+    sha256: "5acfd9177cfecf0bf87578f059728215ccc884388988f55f7a65041b57387d91"  # 0.13.8
     files:
       uv: uv-x86_64-unknown-linux-gnu/uv
       uvx: uv-x86_64-unknown-linux-gnu/uvx
@@ -341,7 +341,7 @@ tools:
     requires: [tenv]
     tenv: tf
     # renovate: datasource=github-releases depName=hashicorp/terraform extractVersion=^v(?<version>.+)$
-    version: 1.17.1
+    version: 1.17.2
     environment:
       CHECKPOINT_DISABLE: "1"
     check: terraform version
