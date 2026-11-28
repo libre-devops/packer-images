@@ -39,4 +39,4 @@ hardening:
   audit:
     repo: https://github.com/ansible-lockdown/UBUNTU24-CIS-Audit
     branch: benchmark_v1.0.0
-    commit: 4eb9eb9e6d3924af7377fc9dd6d3c9f32c63114a
+    commit: 2c31fc529cbb240d7f20f6337894e14f56641c96
