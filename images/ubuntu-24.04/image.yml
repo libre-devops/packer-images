@@ -29,8 +29,8 @@ hardening:
   role:
     repo: https://github.com/ansible-lockdown/UBUNTU24-CIS
     # renovate: datasource=github-tags depName=ansible-lockdown/UBUNTU24-CIS
-    version: 1.8.0
-    commit: 3a2f05b9a8040eb869fd14fdca882aae4f68733b
+    version: 1.9.0
+    commit: 0c08e21a6f302451d4e750419a39fd5fbce9a340
   # The matching goss audit content. It has no releases, only a branch per
   # benchmark version, and that branch runs ahead of the role: its head can
   # expect variables the released role does not pass. So it is pinned to the
