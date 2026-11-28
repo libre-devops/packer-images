@@ -237,7 +237,7 @@ tools:
     requires: [python, uv]
     package: ansible
     # renovate: datasource=pypi depName=ansible
-    version: 14.6.0
+    version: 15.0.0
     # In Ansible's own environment, so Molecule runs this ansible-core and
     # these collections (containers.podman for the podman driver).
     with:
