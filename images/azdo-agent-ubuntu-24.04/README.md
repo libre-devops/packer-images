@@ -8,7 +8,7 @@ Azure DevOps installs the Azure Pipelines agent itself when it adds a VM to a sc
 
 ## Built from
 
-The finished [`ubuntu-24.04`](../ubuntu-24.04) image, so it keeps that image's hardening: UBUNTU24-CIS `1.8.0`, CIS profile `level1-server`, audited with UBUNTU24-CIS-Audit at commit `4eb9eb9e6d39`. The build boots it as a new VM, patches it, adds the tools below and generalises it again. It does not harden it a second time: the test audits the result with the same gate, so a tool that weakens the hardening fails the build.
+The finished [`ubuntu-24.04`](../ubuntu-24.04) image, so it keeps that image's hardening: UBUNTU24-CIS `1.9.0`, CIS profile `level1-server`, audited with UBUNTU24-CIS-Audit at commit `2c31fc529cbb`. The build boots it as a new VM, patches it, adds the tools below and generalises it again. It does not harden it a second time: the test audits the result with the same gate, so a tool that weakens the hardening fails the build.
 
 ## Tools
 

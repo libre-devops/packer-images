@@ -11,8 +11,8 @@ Pinned in [`image.yml`](./image.yml).
 | Input | Version | Pinned to |
 |---|---|---|
 | Installer ISO | `ubuntu-24.04.5-live-server-amd64.iso` | SHA-256 `97f3d7ffb032c3eb...` |
-| Hardening role | [UBUNTU24-CIS](https://github.com/ansible-lockdown/UBUNTU24-CIS) `1.8.0` | commit `3a2f05b9a804` |
-| Audit content | [UBUNTU24-CIS-Audit](https://github.com/ansible-lockdown/UBUNTU24-CIS-Audit) `benchmark_v1.0.0` | commit `4eb9eb9e6d39` |
+| Hardening role | [UBUNTU24-CIS](https://github.com/ansible-lockdown/UBUNTU24-CIS) `1.9.0` | commit `0c08e21a6f30` |
+| Audit content | [UBUNTU24-CIS-Audit](https://github.com/ansible-lockdown/UBUNTU24-CIS-Audit) `benchmark_v1.0.0` | commit `2c31fc529cbb` |
 
 CIS profile: `level1-server`.
 
